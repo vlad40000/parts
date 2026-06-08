@@ -8,6 +8,9 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "db:migrate": "node --env-file=.env.local scripts/run-db-migrations.mjs",
+    "db:inspect": "node --env-file=.env.local scripts/inspect-neon-schema.mjs",
+    "db:smoke": "node --env-file=.env.local scripts/smoke-test-neon.mjs",
     "validate:pricing-policy": "node scripts/validate-pricing-policy.mjs"
   },
   "dependencies": {

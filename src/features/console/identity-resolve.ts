@@ -3,7 +3,7 @@ import type { Identity } from "@/features/bom/schemas/bom";
 import { normalizeModelNumber } from "@/lib/normalize";
 import { resolveTrueOemBrand } from "@/lib/providers/manufacturer/family-config";
 import type { SerialDecodeResult } from "@/lib/serial/decoder";
-import type { IdentityDraft } from "./identity-object";
+import type { IdentityDraft, IntakeSource } from "./identity-object";
 
 export type BrandInputSource = "manual" | "ocr" | "none";
 export type BrandResolutionOrigin = "badge_to_oem" | "model_prefix_inferred" | "operator_disambiguated" | "unresolved";
@@ -12,6 +12,8 @@ export type ResolutionState = "resolved" | "ambiguous_needs_pick" | "unknown_mod
 
 export interface ResolvedIdentity {
   normalizedModel: string;
+  inputBrand: string | null;
+  inputSource: IntakeSource;
   resolvedBrand: string | null;
   brandInputSource: BrandInputSource;
   brandResolutionOrigin: BrandResolutionOrigin;
@@ -149,6 +151,8 @@ export async function resolveIdentity(draft: IdentityDraft, ocr: OcrExtras = {})
 
   return {
     normalizedModel,
+    inputBrand: draft.brand,
+    inputSource: draft.source,
     resolvedBrand: resolvedBrand ?? context.resolvedBrand ?? null,
     brandInputSource,
     brandResolutionOrigin,

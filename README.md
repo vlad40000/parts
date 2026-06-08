@@ -2,31 +2,68 @@
 
 New build target for `vlad40000/parts`.
 
-This is an internal RoadrunnerParts appliance BOM workbench. It is intentionally built as a new Next.js App Router application rather than a patch to the old public Vite homepage.
+This is an internal RoadrunnerParts appliance BOM workbench built with the
+Next.js App Router.
 
 ## Core rules
 
 - Model number is the lowest required intake field.
-- Brand/OEM unknown lowers confidence but does not block model-only discovery.
+- Unknown brand or OEM lowers confidence but does not block model-only discovery.
 - Discovery and pricing are separate lanes.
-- Discovery sources may find diagrams, sections, diagram refs, part numbers, titles, substitutions, source URLs, raw text, and raw evidence hashes.
 - Discovery sources may not populate normalized pricing.
-- Final normalized price fields may only come from:
-  - Encompass
-  - D&L Parts lookup
+- Final normalized prices may only come from Encompass or D&L Parts lookup.
 - Gemini may navigate, classify, reconcile, compare, and flag anomalies.
-- Gemini may not invent part numbers, prices, substitutions, section membership, appliance compatibility, or manufacturer identity.
+- Gemini may not invent part numbers, prices, substitutions, section membership,
+  appliance compatibility, or manufacturer identity.
 
-## Initial routes
+## Routes
 
-- `/` — internal landing page
-- `/internal/console` — model/nameplate identity intake
-- `/internal/bom` — BOM job shell
-- `/api/console/resolve-identity` — identity resolver
-- `/api/internal/bom/jobs` — create/list in-memory placeholder jobs
-- `/api/internal/bom/jobs/[jobId]/*` — discovery/extract/price/verify/export placeholders
+- `/` - internal landing page
+- `/internal/console` - model and nameplate identity intake
+- `/internal/bom` - BOM job shell
+- `/api/console/resolve-identity` - identity resolver
+- `/api/internal/bom/jobs` - create and list Neon-backed jobs
+- `/api/internal/bom/jobs/[jobId]/*` - job workflow endpoints
 
-## Validation commands
+## Neon schema
+
+Copy `.env.example` to `.env.local` and provide the pooled and unpooled Neon
+connection strings.
+
+Apply the additive baseline:
+
+```bash
+npm run db:migrate
+```
+
+Inspect the required tables and pricing constraints:
+
+```bash
+npm run db:inspect
+```
+
+Run a temporary insert, constraint, and cascading-delete check:
+
+```bash
+npm run db:smoke
+```
+
+The schema includes:
+
+- `bom_jobs`
+- `appliance_identities`
+- `diagram_sources`
+- `diagram_sections`
+- `part_observations`
+- `canonical_bom_parts`
+- `pricing_observations`
+- `source_evidence`
+- `bom_conflicts`
+- `agent_events`
+- `verification_results`
+- `export_artifacts`
+
+## Validation
 
 ```bash
 npm install
@@ -37,8 +74,7 @@ npm run build
 npm run validate:pricing-policy
 ```
 
-The local build may require internet access to install npm dependencies.
+## Next phase
 
-## Next implementation phase
-
-Replace the in-memory job store with Neon persistence and implement deterministic discovery, extraction, merge, Encompass/D&L pricing adapters, and the verifier gate.
+Implement deterministic discovery, extraction, canonical merge, Encompass/D&L
+pricing adapters, and the verification gate.
