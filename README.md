@@ -11,7 +11,9 @@ This is an internal RoadrunnerParts appliance BOM workbench. It is intentionally
 - Discovery and pricing are separate lanes.
 - Discovery sources may find diagrams, sections, diagram refs, part numbers, titles, substitutions, source URLs, raw text, and raw evidence hashes.
 - Discovery sources may not populate normalized pricing.
-- Final normalized price fields may only come from Encompass or D&L Parts lookup.
+- Final normalized price fields may only come from:
+  - Encompass
+  - D&L Parts lookup
 - Gemini may navigate, classify, reconcile, compare, and flag anomalies.
 - Gemini may not invent part numbers, prices, substitutions, section membership, appliance compatibility, or manufacturer identity.
 

@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# next
+.next/
+out/
+tsconfig.tsbuildinfo
+
+# production
+build/
+dist/
+
+# env
+.env
+.env*.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# runtime agent state
+.agents/state/workflow_state.json
+
+# OS / editor
+.DS_Store
+.vscode/
