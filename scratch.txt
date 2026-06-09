@@ -1,0 +1,6 @@
+<USER_REQUEST>
+Structurally sound — dedup-code-side, lane-exclusion-across-rounds, and the three exits all landed. Five issues, ordered by impact:
+
+1. **Single zero-add round as an immediate exit re-introduces a false-termination bug** (HIGH). With `return_exceptions=True` swallowing failures, a round where every lane *errors* (rate-limit storm, transient 5xx) looks identical to genuine saturation: `added_total == 0`. Exiting immediately there silently drops every part not yet found and flags it COMPLETE-by-saturation — the mirror of the bug we're fixing. That's exactly why `STALL_ROUNDS` was plural. Gate the exit on success: `if added_total == 0 and at_least_one_lane_succeeded: break`. A fully-failed round re-queues instead of terminating. The saturation signal is "workers ran and found nothing new," not "nothing new appeared."
+
+<truncated 2981 bytes>

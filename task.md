@@ -1,0 +1,3 @@
+- [x] Install `@google/generative-ai`
+- [x] Implement `app/api/ocr/route.ts` with Vercel Edge Runtime and Gemini SDK
+- [x] Verify functionality with `npm run typecheck` and `npm run lint`

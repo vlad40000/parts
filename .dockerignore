@@ -1,0 +1,6 @@
+.next
+node_modules
+.env.local
+.git
+.agents/state/workflow_state.json
+bench/latency.log

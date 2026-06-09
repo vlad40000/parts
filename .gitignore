@@ -26,3 +26,10 @@ pnpm-debug.log*
 # OS / editor
 .DS_Store
 .vscode/
+
+# local/dev warm cache — NOT production state
+# Production cache: Neon extraction_cache table
+services/extraction/cache/*
+!services/extraction/cache/.gitkeep
+
+.vercel

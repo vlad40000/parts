@@ -10,12 +10,9 @@ if (!databaseUrl) {
 const sql = neon(databaseUrl);
 const jobId = `smoke_job_${randomUUID()}`;
 const identityId = `smoke_identity_${randomUUID()}`;
+const extractionRunId = `smoke_extraction_${randomUUID()}`;
+const eventId = `smoke_event_${randomUUID()}`;
 let pricingConstraintRejected = false;
-
-await sql.query(`
-  DELETE FROM bom_jobs
-  WHERE model_number IN ('SMOKE-TEST-MODEL', 'SMOKEAPIMODEL')
-`);
 
 try {
   await sql.transaction((transaction) => [
@@ -50,14 +47,54 @@ try {
       "unknown_model_only_allowed",
       0.25,
       "manual"
+    ]),
+    transaction.query(`
+      INSERT INTO extraction_runs (
+        id, job_id, adapter_name, adapter_version, mode, status,
+        started_at, completed_at, latency_ms, raw_payload_json
+      )
+      VALUES (
+        $1, $2, 'smoke_test', '1', 'fast', 'ok',
+        now(), now(), 0, '{}'::jsonb
+      )
+    `, [
+      extractionRunId,
+      jobId
+    ]),
+    transaction.query(`
+      INSERT INTO bom_job_events (
+        id, job_id, extraction_run_id, event_type,
+        status, phase, note, details
+      )
+      VALUES (
+        $1, $2, $3, 'smoke_test', 'ok',
+        'extraction_complete', 'Temporary schema verification event.', '{}'::jsonb
+      )
+    `, [
+      eventId,
+      jobId,
+      extractionRunId
     ])
   ]);
 
   const jobRows = await sql.query("SELECT id FROM bom_jobs WHERE id = $1", [jobId]);
   const identityRows = await sql.query("SELECT id FROM appliance_identities WHERE job_id = $1", [jobId]);
+  const extractionRows = await sql.query(
+    "SELECT id FROM extraction_runs WHERE job_id = $1",
+    [jobId]
+  );
+  const eventRows = await sql.query(
+    "SELECT id FROM bom_job_events WHERE job_id = $1",
+    [jobId]
+  );
 
-  if (jobRows.length !== 1 || identityRows.length !== 1) {
-    throw new Error("Temporary job and identity rows were not persisted.");
+  if (
+    jobRows.length !== 1 ||
+    identityRows.length !== 1 ||
+    extractionRows.length !== 1 ||
+    eventRows.length !== 1
+  ) {
+    throw new Error("Temporary job, identity, extraction run, and event were not persisted.");
   }
 
   try {
@@ -86,9 +123,23 @@ const remainingIdentities = await sql.query(
   "SELECT id FROM appliance_identities WHERE job_id = $1",
   [jobId]
 );
+const remainingExtractionRuns = await sql.query(
+  "SELECT id FROM extraction_runs WHERE job_id = $1",
+  [jobId]
+);
+const remainingEvents = await sql.query(
+  "SELECT id FROM bom_job_events WHERE job_id = $1",
+  [jobId]
+);
 
-if (remainingIdentities.length !== 0) {
-  throw new Error("Cascading cleanup did not remove the temporary identity.");
+if (
+  remainingIdentities.length !== 0 ||
+  remainingExtractionRuns.length !== 0 ||
+  remainingEvents.length !== 0
+) {
+  throw new Error("Cascading cleanup did not remove all temporary smoke records.");
 }
 
-console.log("Neon smoke test passed: persistence, pricing constraint, and cascade cleanup verified.");
+console.log(
+  "Neon smoke test passed: extraction audit persistence, pricing constraint, and temporary-row cascade cleanup verified."
+);

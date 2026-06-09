@@ -54,6 +54,8 @@ The schema includes:
 - `appliance_identities`
 - `diagram_sources`
 - `diagram_sections`
+- `extraction_runs`
+- `bom_job_events`
 - `part_observations`
 - `canonical_bom_parts`
 - `pricing_observations`
