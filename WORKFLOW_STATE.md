@@ -69,11 +69,10 @@ Build the internal multi-manufacturer Appliance BOM Workbench, wiring the Python
   - Replaced hard-coded `GEMINI_API_KEY` mapping with the recommended `client = genai.Client()`.
   - Added `google-genai` to `requirements.txt`.
   - Added `GEMINI_API_KEY=your_key_here` to `.env.local`.
-  - Started local dev server with `npx vercel dev --yes` to properly serve the Python extraction endpoint alongside Next.js.
-  - **Awaiting User Action**: Provide real `GEMINI_API_KEY` in `.env.local` and trigger extraction in the UI.
+  - Verified extraction runs successfully in Vercel Production by securely configuring the `GEMINI_API_KEY` Environment Variable and triggering a test against `/api/extract/cold-sync`.
 
 ## Next Steps
-1. **Execute Step 6 Smoke Test**: With a valid Gemini key and `vercel dev` running, create the WTW5000DW1 test job, click "Run Extraction", and verify the DB results.
+1. **Execute Step 6 Smoke Test**: Trigger a full extraction via the UI on production (https://appliance-bom-initial-build.vercel.app/) and verify the DB results.
 2. Step 7: Encompass / D&L Parts pricing adapter.
 3. Follow-up: Wire `run_pipeline_warm` to Neon `extraction_cache` table (requires migration first).
 
