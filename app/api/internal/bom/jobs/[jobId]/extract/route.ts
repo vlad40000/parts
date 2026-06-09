@@ -10,7 +10,7 @@ import {
   persistExtractionFailure,
   persistExtractionSuccess
 } from "@/features/bom/extraction/extraction-store";
-import { resolveInternalAppUrl } from "@/features/bom/extraction/internal-url";
+import { resolveInternalWorkerRequest } from "@/features/bom/extraction/internal-url";
 
 export const runtime = "nodejs";
 
@@ -22,12 +22,23 @@ async function readMode(request: Request): Promise<ExtractionMode> {
   return extractionModeSchema.parse(parsedBody.mode ?? "fast");
 }
 
+function isVercelAuthPage(value: string): boolean {
+  return value.includes("Vercel Authentication") ||
+    value.includes("Authentication Required") ||
+    value.includes("x-vercel-protection-bypass");
+}
+
 function errorDetails(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    if (isVercelAuthPage(value)) {
+      return "Vercel Deployment Protection blocked the Python extraction worker.";
+    }
+    return value;
+  }
   if (value && typeof value === "object") {
     const body = value as { detail?: unknown; details?: unknown; error?: unknown };
     const detail = body.detail ?? body.details ?? body.error;
-    if (typeof detail === "string") return detail;
+    if (typeof detail === "string") return errorDetails(detail);
   }
   return JSON.stringify(value);
 }
@@ -63,7 +74,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
     );
   }
 
-  const workerUrl = new URL("/api/extract/cold-sync", resolveInternalAppUrl()).toString();
+  const workerRequest = resolveInternalWorkerRequest("/api/extract/cold-sync");
+  const workerUrl = workerRequest.url;
   const runId = `extraction_run_${randomUUID()}`;
   const startedAt = new Date();
   const startedMs = Date.now();
@@ -72,7 +84,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
   try {
     const response = await fetch(workerUrl, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...workerRequest.headers
+      },
       cache: "no-store",
       body: JSON.stringify({
         job_id: job.jobId,
