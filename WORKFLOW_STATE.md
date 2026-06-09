@@ -72,7 +72,7 @@ Build the internal multi-manufacturer Appliance BOM Workbench, wiring the Python
   - Verified extraction runs successfully in Vercel Production by securely configuring the `GEMINI_API_KEY` Environment Variable and triggering a test against `/api/extract/cold-sync`.
 
 ## Next Steps
-1. **Execute Step 6 Smoke Test**: Trigger a full extraction via the UI on production (https://appliance-bom-initial-build.vercel.app/) and verify the DB results.
+1. **Execute Step 6 Smoke Test**: Trigger a full extraction via the UI on production (https://appliance-parts-pipeline.vercel.app/) and verify the DB results.
 2. Step 7: Encompass / D&L Parts pricing adapter.
 3. Follow-up: Wire `run_pipeline_warm` to Neon `extraction_cache` table (requires migration first).
 
