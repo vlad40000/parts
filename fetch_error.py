@@ -1,7 +1,7 @@
 import urllib.request
 import urllib.error
 
-req = urllib.request.Request('https://appliance-bom-initial-build.vercel.app/api/extract/cold-sync', data=b'{}', method='POST')
+req = urllib.request.Request('https://appliance-parts-pipeline.vercel.app/api/extract/cold-sync', data=b'{}', method='POST')
 req.add_header('Content-Type', 'application/json')
 try:
     res = urllib.request.urlopen(req)
