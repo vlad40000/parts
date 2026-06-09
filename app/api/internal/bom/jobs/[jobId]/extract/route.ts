@@ -10,7 +10,7 @@ import {
   persistExtractionFailure,
   persistExtractionSuccess
 } from "@/features/bom/extraction/extraction-store";
-import { resolveInternalWorkerRequest } from "@/features/bom/extraction/internal-url";
+import { resolveInternalWorkerRequest, type InternalWorkerRequest } from "@/features/bom/extraction/internal-url";
 
 export const runtime = "nodejs";
 
@@ -28,17 +28,23 @@ function isVercelAuthPage(value: string): boolean {
     value.includes("x-vercel-protection-bypass");
 }
 
-function errorDetails(value: unknown): string {
+function deploymentProtectionDetails(workerRequest: InternalWorkerRequest): string {
+  if (!workerRequest.hasProtectionBypass) {
+    return "Vercel Deployment Protection blocked the Python extraction worker. No supported bypass secret env var is available in this runtime. Set VERCEL_AUTOMATION_BYPASS_SECRET or INTERNAL_WORKER_BYPASS_SECRET and redeploy.";
+  }
+
+  return `Vercel Deployment Protection blocked the Python extraction worker. A bypass header was sent from ${workerRequest.protectionBypassEnvName}, but Vercel rejected it. Regenerate the project bypass secret, make sure it matches the deployed environment, and redeploy.`;
+}
+
+function errorDetails(value: unknown, workerRequest: InternalWorkerRequest): string {
   if (typeof value === "string") {
-    if (isVercelAuthPage(value)) {
-      return "Vercel Deployment Protection blocked the Python extraction worker.";
-    }
+    if (isVercelAuthPage(value)) return deploymentProtectionDetails(workerRequest);
     return value;
   }
   if (value && typeof value === "object") {
     const body = value as { detail?: unknown; details?: unknown; error?: unknown };
     const detail = body.detail ?? body.details ?? body.error;
-    if (typeof detail === "string") return errorDetails(detail);
+    if (typeof detail === "string") return errorDetails(detail, workerRequest);
   }
   return JSON.stringify(value);
 }
@@ -110,7 +116,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
     const latencyMs = Date.now() - startedMs;
 
     if (!response.ok) {
-      const details = errorDetails(rawPayload);
+      const details = errorDetails(rawPayload, workerRequest);
       await persistExtractionFailure({
         jobId,
         runId,
