@@ -52,7 +52,7 @@ export const extractionScaffoldPayloadSchema = z.object({
   }).optional(),
   diagram_sections: z.array(extractionDiagramSectionSchema).default([]),
   canonical_bom_parts: z.array(extractionCanonicalPartSchema).default([]),
-  expected_parts_count: z.number().int().positive().max(500).nullable().optional(),
+  expected_parts_count: z.number().int().nonnegative().max(500).nullable().optional(),
   expected_count_meta: z.record(z.unknown()).optional(),
   parts_found: z.number().int().nonnegative().optional(),
   warnings: z.array(z.string()).default([]),

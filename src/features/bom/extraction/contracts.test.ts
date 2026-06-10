@@ -55,4 +55,24 @@ describe("extractionScaffoldPayloadSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("accepts zero when no trusted exact-model total is available", () => {
+    const result = extractionScaffoldPayloadSchema.safeParse({
+      job_id: "job_123",
+      status: "ok",
+      diagram_sections: [],
+      canonical_bom_parts: [{
+        section_source_name: "Cabinet",
+        manufacturer_part_number: "WH01X29177"
+      }],
+      expected_parts_count: 0,
+      expected_count_meta: {
+        selection_basis: "unknown"
+      },
+      parts_found: 1,
+      warnings: ["No credible exact-model expected part total was established."]
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
