@@ -41,4 +41,18 @@ describe("extractionScaffoldPayloadSchema", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("rejects implausible expected totals derived from diagram labels", () => {
+    const result = extractionScaffoldPayloadSchema.safeParse({
+      job_id: "job_123",
+      status: "partial",
+      diagram_sections: [],
+      canonical_bom_parts: [],
+      expected_parts_count: 2656,
+      parts_found: 0,
+      warnings: []
+    });
+
+    expect(result.success).toBe(false);
+  });
 });

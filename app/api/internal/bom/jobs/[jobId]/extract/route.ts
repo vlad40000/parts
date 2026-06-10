@@ -203,6 +203,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
       );
     }
 
+    if (payload.canonical_bom_parts.length === 0) {
+      const details = payload.warnings.join(" ") ||
+        "Extraction returned no canonical BOM parts.";
+      await persistExtractionFailure({
+        jobId,
+        runId,
+        mode: effectiveMode,
+        adapterName,
+        adapterVersion,
+        startedAt,
+        completedAt,
+        latencyMs: effectiveLatency,
+        rawPayload
+      }, details);
+      return NextResponse.json(
+        {
+          status: "failed",
+          error: "Extraction returned no BOM parts",
+          details,
+          warnings: payload.warnings
+        },
+        { status: 502 }
+      );
+    }
+
     const inserted = await persistExtractionSuccess(job, {
       jobId,
       runId,

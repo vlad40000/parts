@@ -40,8 +40,9 @@ WORKERS_STEP2 = 3
 WORKERS_STEP4 = 3
 WORKERS_STEP6 = 5
 PARTS_PER_WORKER = 20
+MAX_CREDIBLE_EXPECTED_PARTS = 500
 
-client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
+client = None
 
 
 # ---------------------------------------------------------------------------- schemas
@@ -129,7 +130,20 @@ S5_COUNT = {
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
         "basis": {
             "type": "string",
-            "enum": ["diagram_callouts", "searspartsdirect", "cross_referenced"],
+            "enum": ["diagram_callouts", "source_total", "cross_referenced"],
+        },
+        "source_totals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["source", "count", "url"],
+                "properties": {
+                    "source": {"type": "string"},
+                    "count": {"type": "integer"},
+                    "url": {"type": "string"},
+                    "evidence": {"type": ["string", "null"]},
+                },
+            },
         },
         "per_section_counts": {
             "type": "array",
@@ -260,6 +274,10 @@ def _call(model: str, prompt: str, schema: dict, thinking_level: str,
     last_err = None
     for _ in range(retries + 1):
         try:
+            global client
+            if client is None:
+                api_key = os.environ.get("GEMINI_API_KEY")
+                client = genai.Client(api_key=api_key) if api_key else genai.Client()
             resp = client.models.generate_content(
                 model=model, contents=contents,
                 config=_config(schema, thinking_level),
@@ -374,7 +392,8 @@ def merge_audit_into_sections(sections: dict, audits: list) -> dict:
     for a in audits:
         for m in a.get("missing_sections", []) if "_error" not in a else []:
             name = m.get("section_name", "").strip()
-            if name and name.lower() not in known:
+            has_model_evidence = bool(m.get("diagram_url") or m.get("page_url"))
+            if name and has_model_evidence and name.lower() not in known:
                 known.add(name.lower())
                 sections["sections"].append({
                     "section_name": name,
@@ -390,15 +409,88 @@ def step5_expected_count(nameplate: dict, sections: dict) -> dict:
     mn = nameplate["model_number"]
     blob = json.dumps(sections.get("sections", []), ensure_ascii=False)
     prompt = (
-        f"Establish the EXPECTED total parts count for appliance model '{mn}' — the finish line "
-        "for an extraction loop. PRIMARY method: sum the highest callout/reference number across "
-        "each assembly section's diagram (open the diagram images via url_context to count). "
-        "SECONDARY method: cross-reference the parts list on searspartsdirect.com for this model. "
-        "If the site is blocked or unavailable, rely on the diagram callouts alone and lower the "
-        "confidence. Report the integer total, the per-section counts, the confidence, and whether "
-        "the basis was diagram_callouts, searspartsdirect, or cross_referenced.\n\nSections:\n" + blob
+        f"Establish the expected count of DISTINCT ORDERABLE PART ROWS for exact appliance model "
+        f"'{mn}'. Prefer exact-model totals visibly reported by distributor model pages such as "
+        "Sears PartsDirect and Encompass. Record every verified total in source_totals with its "
+        "exact URL and visible evidence text. If credible exact-model sources disagree, set "
+        "expected_parts_count to the largest credible total and explain the range in notes.\n\n"
+        "CRITICAL: diagram reference numbers such as 999, 825, 693, or 557 are identifiers, not "
+        "ordinal counts. NEVER use the highest reference number as a count and NEVER sum reference "
+        "numbers. A per-section count is valid only when you counted distinct visible callout rows "
+        "or parts-table rows. Do not include generic search-result totals, compatible-model totals, "
+        "accessory pages, or unrelated models. Use basis=source_total for one verified distributor "
+        "total, cross_referenced for multiple verified totals, or diagram_callouts only when actual "
+        "distinct callouts were counted. Return low confidence when no exact-model total is visible."
+        "\n\nSections:\n" + blob
     )
-    return _call(MODEL_PRO, prompt, S5_COUNT, "MEDIUM")
+    return _call(MODEL_FLASH, prompt, S5_COUNT, "MINIMAL")
+
+
+def _credible_count(value) -> int | None:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if 0 < count <= MAX_CREDIBLE_EXPECTED_PARTS else None
+
+
+def normalize_expected_count(count_info: dict) -> tuple[int, dict]:
+    """
+    Select a bounded expected count from exact-model evidence.
+
+    Source totals outrank model-computed totals. Diagram reference labels are
+    never considered because they are identifiers, not row counts.
+    """
+    source_counts = []
+    for source in count_info.get("source_totals", []) or []:
+        count = _credible_count(source.get("count"))
+        if count is not None:
+            source_counts.append({
+                "source": source.get("source"),
+                "count": count,
+                "url": source.get("url"),
+                "evidence": source.get("evidence"),
+            })
+
+    raw_count = count_info.get("expected_parts_count")
+    raw_credible = _credible_count(raw_count)
+    selected = 0
+    selection_basis = "unknown"
+
+    if source_counts:
+        selected = max(source["count"] for source in source_counts)
+        selection_basis = "source_totals"
+    else:
+        section_counts = [
+            count
+            for item in count_info.get("per_section_counts", []) or []
+            if (count := _credible_count(item.get("count"))) is not None
+        ]
+        section_total = sum(section_counts)
+        if section_counts and section_total <= MAX_CREDIBLE_EXPECTED_PARTS:
+            selected = section_total
+            selection_basis = "counted_diagram_rows"
+        elif raw_credible is not None:
+            selected = raw_credible
+            selection_basis = "bounded_model_total"
+
+    meta = {
+        **count_info,
+        "raw_expected_parts_count": raw_count,
+        "selected_expected_parts_count": selected,
+        "selection_basis": selection_basis,
+        "source_totals": source_counts,
+    }
+    if source_counts:
+        values = [source["count"] for source in source_counts]
+        meta["credible_source_range"] = {
+            "minimum": min(values),
+            "maximum": max(values),
+        }
+    if raw_count and raw_credible is None:
+        meta["rejected_expected_parts_count"] = raw_count
+
+    return selected, meta
 
 
 def step6_extract(nameplate: dict, sections: dict, assignment: dict, found_keys: set) -> dict:
@@ -515,6 +607,7 @@ def initial_assignments(sections: dict) -> list:
         {"worker_id": f"W{i+1}", "target_sections": b, "callout_ranges": [],
          "focus_note": "initial split", "resolve_unconfirmed": []}
         for i, b in enumerate(buckets)
+        if b
     ]
 
 
@@ -592,10 +685,12 @@ def to_scaffold_payload(results: dict, job_id: str) -> dict:
         "diagram_sections": diagram_sections,
         "canonical_bom_parts": canonical_bom_parts,
         "expected_parts_count": results.get("expected_parts_count"),
+        "expected_count_meta": results.get("expected_count_meta", {}),
         "parts_found": results.get("parts_found")
     }
 
-def run_pipeline_fast(timeout_seconds: int = 55, **nameplate_input) -> dict:
+def run_pipeline_fast(timeout_seconds: int = 55, audit_sections: bool = False,
+                      **nameplate_input) -> dict:
     """
     Cold-sync path: runs the pipeline with a strict latency envelope.
     If it hits timeout_seconds, it will return partial results seamlessly.
@@ -638,14 +733,19 @@ def run_pipeline_fast(timeout_seconds: int = 55, **nameplate_input) -> dict:
     sections = step3_consolidate(nameplate, diagrams)
     t_curr = log_bench("step3_consolidate", t_curr)
 
-    print("[4] auditing for missing sections ...")
-    audits = step4_audit(nameplate, sections)
-    sections = merge_audit_into_sections(sections, audits)
-    t_curr = log_bench("step4_audit", t_curr)
+    if audit_sections:
+        print("[4] auditing for missing sections ...")
+        audits = step4_audit(nameplate, sections)
+        sections = merge_audit_into_sections(sections, audits)
+        t_curr = log_bench("step4_audit", t_curr)
 
     print("[5] expected parts count ...")
-    count_info = step5_expected_count(nameplate, sections)
-    expected = max(1, int(count_info.get("expected_parts_count", 0)))
+    raw_count_info = step5_expected_count(nameplate, sections)
+    expected, count_info = normalize_expected_count(raw_count_info)
+    extraction_target = expected or min(
+        MAX_CREDIBLE_EXPECTED_PARTS,
+        max(PARTS_PER_WORKER, len(sections.get("sections", [])) * PARTS_PER_WORKER),
+    )
     t_curr = log_bench("step5_expected_count", t_curr)
 
     master: dict = {}
@@ -690,7 +790,7 @@ def run_pipeline_fast(timeout_seconds: int = 55, **nameplate_input) -> dict:
 
             added_total += merge_parts(master, provenance, out.get("parts", []))
         
-        if len(master) >= expected:
+        if expected > 0 and len(master) >= expected:
             break
 
         # Saturation check: workers successfully ran, but nothing new was added
@@ -707,7 +807,9 @@ def run_pipeline_fast(timeout_seconds: int = 55, **nameplate_input) -> dict:
             break
 
         print("[7] gameplan ...")
-        plan = step7_gameplan(nameplate, sections, master, expected, rnd + 1, list(past_covered))
+        plan = step7_gameplan(
+            nameplate, sections, master, extraction_target, rnd + 1, list(past_covered)
+        )
         assignments = plan.get("assignments") or initial_assignments(sections)
         
         # Code-side filter: drop overlapping sections
@@ -759,7 +861,7 @@ def run_pipeline_fast(timeout_seconds: int = 55, **nameplate_input) -> dict:
 # --------------------------------------------------------------------------- pipeline
 def run_pipeline(**nameplate_input) -> dict:
     # Use the fast pipeline logic for both by default to ensure latency limits
-    return run_pipeline_fast(timeout_seconds=9999, **nameplate_input)
+    return run_pipeline_fast(timeout_seconds=9999, audit_sections=True, **nameplate_input)
 
 
 def run_pipeline_warm(**nameplate_input) -> dict:
@@ -777,7 +879,7 @@ def run_pipeline_warm(**nameplate_input) -> dict:
         3. On miss: call run_pipeline_fast, store result, return it.
     """
     # TODO(follow-up): query Neon extraction_cache before running extraction.
-    return run_pipeline_fast(**nameplate_input)
+    return run_pipeline_fast(audit_sections=True, **nameplate_input)
 
 
 # ----------------------------------------------------------------- input + export

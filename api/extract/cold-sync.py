@@ -84,6 +84,37 @@ def _quarantine_pricing(payload: dict) -> dict:
     return payload
 
 
+def _build_warnings(payload: dict) -> list[str]:
+    warnings = []
+    expected = payload.get("expected_parts_count") or 0
+    found = payload.get("parts_found") or 0
+    count_meta = payload.get("expected_count_meta") or {}
+    source_range = count_meta.get("credible_source_range") or {}
+    minimum = source_range.get("minimum")
+    maximum = source_range.get("maximum")
+
+    if minimum and maximum and minimum != maximum:
+        warnings.append(
+            f"Exact-model source totals disagree ({minimum}-{maximum}); "
+            f"using {expected} as the coverage target."
+        )
+    rejected = count_meta.get("rejected_expected_parts_count")
+    if rejected:
+        warnings.append(
+            f"Ignored implausible expected count {rejected}; diagram reference "
+            "labels are not part totals."
+        )
+    if expected > 0 and found < expected:
+        warnings.append(
+            f"Partial extraction: found {found} of {expected} expected parts."
+        )
+    elif expected == 0:
+        warnings.append(
+            "No credible exact-model expected part total was established."
+        )
+    return warnings
+
+
 # ---------------------------------------------------------------------------
 # Request validation
 # ---------------------------------------------------------------------------
@@ -187,10 +218,7 @@ class handler(BaseHTTPRequestHandler):
             "mode": mode,
             "latency_ms": max(0, round((time.perf_counter() - started_at) * 1000)),
         }
-        payload["warnings"] = (
-            [f"Partial extraction: found {found} of {expected} expected parts."]
-            if is_partial else []
-        )
+        payload["warnings"] = _build_warnings(payload)
 
         # ------------------------------------------------------------------ return
         self._send_json(200, payload)
