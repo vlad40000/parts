@@ -44,13 +44,20 @@ export function resolveVercelProtectionBypassSecret(
 export function resolveVercelProtectionBypassHeaders(
   env: Record<string, string | undefined> = process.env
 ): Record<string, string> {
-  const bypassSecret = resolveVercelProtectionBypassSecret(env);
-  if (!bypassSecret) return {};
+  const headers: Record<string, string> = {};
 
-  return {
-    "x-vercel-protection-bypass": bypassSecret.value,
-    "x-vercel-set-bypass-cookie": "true"
-  };
+  const bypassSecret = resolveVercelProtectionBypassSecret(env);
+  if (bypassSecret) {
+    headers["x-vercel-protection-bypass"] = bypassSecret.value;
+    headers["x-vercel-set-bypass-cookie"] = "true";
+  }
+
+  const oidcToken = env.VERCEL_OIDC_TOKEN?.trim();
+  if (oidcToken) {
+    headers["x-vercel-trusted-oidc-idp-token"] = oidcToken;
+  }
+
+  return headers;
 }
 
 export function resolveInternalWorkerRequest(
@@ -59,12 +66,18 @@ export function resolveInternalWorkerRequest(
 ): InternalWorkerRequest {
   const url = new URL(path, resolveInternalAppUrl(env)).toString();
   const bypassSecret = resolveVercelProtectionBypassSecret(env);
+  const oidcToken = env.VERCEL_OIDC_TOKEN?.trim();
+
+  const hasProtectionBypass = Boolean(bypassSecret || oidcToken);
+  const protectionBypassEnvName = bypassSecret 
+    ? bypassSecret.envName 
+    : (oidcToken ? "VERCEL_OIDC_TOKEN" : null);
 
   return {
     url,
     headers: resolveVercelProtectionBypassHeaders(env),
-    hasProtectionBypass: Boolean(bypassSecret),
-    protectionBypassEnvName: bypassSecret?.envName ?? null,
+    hasProtectionBypass,
+    protectionBypassEnvName,
     usesVercelUrl: Boolean(env.VERCEL_URL?.trim()) && !env.INTERNAL_APP_URL?.trim(),
     usesExplicitInternalAppUrl: Boolean(env.INTERNAL_APP_URL?.trim())
   };

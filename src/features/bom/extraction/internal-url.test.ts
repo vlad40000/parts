@@ -63,6 +63,25 @@ describe("resolveVercelProtectionBypassHeaders", () => {
       "x-vercel-set-bypass-cookie": "true"
     });
   });
+
+  it("attaches the Vercel OIDC token bypass header when configured", () => {
+    expect(resolveVercelProtectionBypassHeaders({
+      VERCEL_OIDC_TOKEN: " oidc_token_value "
+    })).toEqual({
+      "x-vercel-trusted-oidc-idp-token": "oidc_token_value"
+    });
+  });
+
+  it("attaches both bypass secret and OIDC token headers when both are configured", () => {
+    expect(resolveVercelProtectionBypassHeaders({
+      VERCEL_AUTOMATION_BYPASS_SECRET: "bypass_secret",
+      VERCEL_OIDC_TOKEN: "oidc_token_value"
+    })).toEqual({
+      "x-vercel-protection-bypass": "bypass_secret",
+      "x-vercel-set-bypass-cookie": "true",
+      "x-vercel-trusted-oidc-idp-token": "oidc_token_value"
+    });
+  });
 });
 
 describe("resolveInternalWorkerRequest", () => {
@@ -82,4 +101,21 @@ describe("resolveInternalWorkerRequest", () => {
       usesExplicitInternalAppUrl: false
     });
   });
+
+  it("supports Vercel OIDC token for bypass diagnostics", () => {
+    expect(resolveInternalWorkerRequest("/api/extract/cold-sync", {
+      VERCEL_URL: "deployment.vercel.app",
+      VERCEL_OIDC_TOKEN: "oidc_token_value"
+    })).toEqual({
+      url: "https://deployment.vercel.app/api/extract/cold-sync",
+      headers: {
+        "x-vercel-trusted-oidc-idp-token": "oidc_token_value"
+      },
+      hasProtectionBypass: true,
+      protectionBypassEnvName: "VERCEL_OIDC_TOKEN",
+      usesVercelUrl: true,
+      usesExplicitInternalAppUrl: false
+    });
+  });
 });
+

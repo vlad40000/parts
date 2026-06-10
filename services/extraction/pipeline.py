@@ -607,7 +607,7 @@ def run_pipeline_fast(timeout_seconds: int = 55, **nameplate_input) -> dict:
           services/extraction/cache/ is NOT a durable store in serverless/Vercel;
           do not rely on it across invocations. Production cache → Neon extraction_cache.
     """
-    _is_dev = os.environ.get("PIPELINE_ENV", "dev") != "production"
+    _is_dev = os.environ.get("PIPELINE_ENV", "dev") != "production" and os.environ.get("VERCEL") != "1"
 
     bench_log = None
     if _is_dev:
