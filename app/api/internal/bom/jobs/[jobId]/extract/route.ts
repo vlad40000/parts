@@ -243,6 +243,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
     return NextResponse.json({
       jobId,
       extractionRunId: inserted.extractionRunId,
+      expectedPartsCount: payload.expected_parts_count,
+      expectedCountMeta: payload.expected_count_meta,
       inserted: {
         diagramSections: inserted.diagramSectionsInserted,
         partObservations: inserted.partObservationsInserted,

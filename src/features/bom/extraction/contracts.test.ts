@@ -25,6 +25,14 @@ describe("extractionScaffoldPayloadSchema", () => {
           _source_url: "https://example.com/part"
         }
       }],
+      expected_parts_count: 94,
+      expected_count_meta: {
+        source_totals: [{
+          source: "Encompass",
+          count: 94,
+          url: "https://encompass.com/search?searchTerm=TEST123"
+        }]
+      },
       warnings: ["Partial extraction"]
     });
 
@@ -56,7 +64,7 @@ describe("extractionScaffoldPayloadSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("accepts zero when no trusted exact-model total is available", () => {
+  it("rejects zero because extraction requires a trusted exact-model target", () => {
     const result = extractionScaffoldPayloadSchema.safeParse({
       job_id: "job_123",
       status: "ok",
@@ -73,6 +81,6 @@ describe("extractionScaffoldPayloadSchema", () => {
       warnings: ["No credible exact-model expected part total was established."]
     });
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 });

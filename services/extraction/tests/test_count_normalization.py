@@ -1,8 +1,15 @@
+from unittest.mock import patch
+
+import pytest
+
 from services.extraction.pipeline import (
     consolidate_diagram_results,
     initial_assignments,
     merge_audit_into_sections,
     normalize_expected_count,
+    parse_encompass_expected_count,
+    parse_sears_expected_count,
+    step5_expected_count,
     to_scaffold_payload,
 )
 
@@ -64,6 +71,100 @@ def test_exact_model_source_totals_override_reference_label_sum():
     assert meta["credible_source_range"] == {"minimum": 85, "maximum": 94}
     assert meta["rejected_expected_parts_count"] == 2656
     assert meta["selection_basis"] == "source_totals"
+
+
+def test_sears_catalog_payload_supplies_exact_model_target():
+    html = """
+    <script>
+    window.CATALOG_API_RESPONSE = {
+      "Model:exact": {
+        "__typename": "Model",
+        "number": "PTW905BPT0DG",
+        "partCount({\\"foo\\":\\"bar\\"})": 85
+      },
+      "Model:other": {
+        "__typename": "Model",
+        "number": "PTW905BPT0DR",
+        "partCount({})": 120
+      }
+    };
+    </script>
+    """
+
+    result = parse_sears_expected_count(html, "PTW905BPT0DG")
+
+    assert result["count"] == 85
+    assert result["source"] == "Sears PartsDirect"
+    assert result["url"].endswith("q=PTW905BPT0DG")
+
+
+def test_encompass_exact_model_card_supplies_target():
+    html = """
+    <article>
+      <h2>GE washer</h2>
+      <p>Model #PTW905BPT0DG</p>
+      <span>94 parts</span>
+    </article>
+    <article>
+      <p>Model #OTHER123</p>
+      <span>245 parts</span>
+    </article>
+    """
+
+    result = parse_encompass_expected_count(html, "PTW905BPT0DG")
+
+    assert result["count"] == 94
+    assert result["source"] == "Encompass"
+    assert result["url"].endswith("searchTerm=PTW905BPT0DG")
+
+
+def test_encompass_rejects_count_without_exact_model():
+    assert parse_encompass_expected_count(
+        "<article><p>Model #OTHER123</p><span>94 parts</span></article>",
+        "PTW905BPT0DG",
+    ) is None
+
+
+def test_source_resolver_uses_larger_exact_model_site_target():
+    sears_html = """
+    <script>window.CATALOG_API_RESPONSE = {
+      "Model:exact": {
+        "__typename": "Model",
+        "number": "PTW905BPT0DG",
+        "partCount({})": 85
+      }
+    };</script>
+    """
+    encompass_html = """
+    <article><p>Model #PTW905BPT0DG</p><span>94 parts</span></article>
+    """
+
+    def fetch_html(url):
+        return sears_html if "searspartsdirect.com" in url else encompass_html
+
+    with patch("services.extraction.pipeline._fetch_source_html", side_effect=fetch_html):
+        result = step5_expected_count({"model_number": "PTW905BPT0DG"})
+
+    assert result["expected_parts_count"] == 94
+    assert result["basis"] == "cross_referenced"
+    assert sorted(source["count"] for source in result["source_totals"]) == [85, 94]
+
+
+def test_source_resolver_fails_instead_of_returning_unknown():
+    with patch(
+        "services.extraction.pipeline._direct_expected_count_source",
+        return_value={"_error": "blocked"},
+    ), patch(
+        "services.extraction.pipeline._grounded_expected_count_source",
+        return_value={
+            "expected_parts_count": 0,
+            "confidence": "low",
+            "basis": "source_total",
+            "source_totals": [],
+        },
+    ):
+        with pytest.raises(RuntimeError, match="Unable to establish"):
+            step5_expected_count({"model_number": "PTW905BPT0DG"})
 
 
 def test_implausible_unverified_total_becomes_unknown():

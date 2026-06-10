@@ -10,6 +10,15 @@ import type { BomJob, BomJobStatus } from "@/features/bom/jobs/types";
 interface ExtractionSuccess {
   jobId: string;
   extractionRunId: string;
+  expectedPartsCount: number;
+  expectedCountMeta?: {
+    source_totals?: Array<{
+      source?: string;
+      count?: number;
+      url?: string;
+      evidence?: string;
+    }>;
+  };
   inserted: {
     diagramSections: number;
     partObservations: number;
@@ -108,6 +117,11 @@ function ExtractionResultPanel({ result }: { result: ExtractionResult }) {
     );
   }
 
+  const targetSources = result.expectedCountMeta?.source_totals ?? [];
+  const targetSourceLabel = targetSources
+    .map((source) => `${source.source ?? "Source"}: ${source.count ?? "?"}`)
+    .join(", ");
+
   return (
     <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3">
       <div className="flex items-center gap-2">
@@ -116,6 +130,10 @@ function ExtractionResultPanel({ result }: { result: ExtractionResult }) {
       </div>
 
       <div className="divide-y divide-emerald-100 rounded-md border border-emerald-100 bg-white px-4">
+        <InfoRow label="Expected parts target" value={result.expectedPartsCount} />
+        {targetSourceLabel && (
+          <InfoRow label="Target source" value={targetSourceLabel} />
+        )}
         <InfoRow label="Diagram sections inserted" value={result.inserted.diagramSections} />
         <InfoRow label="Part observations inserted" value={result.inserted.partObservations} />
         <InfoRow label="Canonical BOM parts inserted" value={result.inserted.canonicalBomParts} />

@@ -18,7 +18,9 @@ import sys
 import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 from google import genai
 from google.genai import types
@@ -48,6 +50,12 @@ TRUSTED_EXPECTED_COUNT_HOSTS = frozenset({
     "searspartsdirect.com",
     "www.searspartsdirect.com",
 })
+SOURCE_FETCH_TIMEOUT_SECONDS = 10
+SOURCE_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/137.0.0.0 Safari/537.36"
+)
 
 client = None
 
@@ -456,29 +464,261 @@ def merge_audit_into_sections(sections: dict, audits: list) -> dict:
     return sections
 
 
-def step5_expected_count(nameplate: dict, sections: dict) -> dict:
-    mn = nameplate["model_number"]
-    blob = json.dumps(sections.get("sections", []), ensure_ascii=False)
-    prompt = (
-        f"Establish the expected count of DISTINCT ORDERABLE PART ROWS for exact appliance model "
-        f"'{mn}'. Only exact-model totals visibly reported by searspartsdirect.com or encompass.com "
-        "qualify as the canonical unique-part target. Record every verified total from those two "
-        "domains in source_totals with its exact URL and visible evidence text. If those credible "
-        "exact-model sources disagree, set "
-        "expected_parts_count to the largest credible total and explain the range in notes.\n\n"
-        "CRITICAL: diagram reference numbers such as 999, 825, 693, or 557 are identifiers, not "
-        "ordinal counts. NEVER use the highest reference number as a count and NEVER sum reference "
-        "numbers. A per-section count is valid only when you counted distinct visible callout rows "
-        "or parts-table rows. Diagram-section totals from PartsDr or similar sites are occurrence "
-        "counts and may contain duplicate MPNs across diagrams; preserve them in per_section_counts "
-        "but never use their sum as the unique-part target. Do not include generic search-result "
-        "totals, compatible-model totals, accessory pages, or unrelated models. Use "
-        "basis=source_total for one verified Sears/Encompass total, cross_referenced for both, or "
-        "diagram_callouts only when neither trusted source total is available. Return "
-        "expected_parts_count=0 with low confidence when neither trusted exact-model total is visible."
-        "\n\nSections:\n" + blob
+def _normalize_model_token(value) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def _fetch_source_html(url: str) -> str:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": SOURCE_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     )
-    return _call(MODEL_FLASH, prompt, S5_COUNT, "MINIMAL")
+    with urlopen(request, timeout=SOURCE_FETCH_TIMEOUT_SECONDS) as response:
+        return response.read().decode("utf-8", errors="replace")
+
+
+def _extract_balanced_json(text: str, marker: str) -> dict | None:
+    marker_index = text.find(marker)
+    if marker_index < 0:
+        return None
+    first_brace = text.find("{", marker_index)
+    if first_brace < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(first_brace, len(text)):
+        char = text[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[first_brace:index + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
+def _dynamic_count(record: dict, prefix: str) -> int | None:
+    for key, value in record.items():
+        if not str(key).startswith(prefix):
+            continue
+        if isinstance(value, int):
+            return _credible_count(value)
+        if isinstance(value, dict):
+            return _credible_count(value.get("totalCount"))
+    return None
+
+
+def parse_sears_expected_count(html: str, model_number: str) -> dict | None:
+    payload = _extract_balanced_json(html, "CATALOG_API_RESPONSE")
+    if not payload:
+        return None
+
+    requested = _normalize_model_token(model_number)
+    candidates = []
+    for value in payload.values():
+        if not isinstance(value, dict) or value.get("__typename") != "Model":
+            continue
+        candidate_model = _normalize_model_token(
+            value.get("number") or value.get("modelNumber") or value.get("model")
+        )
+        if candidate_model != requested:
+            continue
+        count = (
+            _dynamic_count(value, "partCount(")
+            or _credible_count(value.get("partCount"))
+        )
+        if count:
+            candidates.append(count)
+
+    if not candidates:
+        return None
+    count = max(candidates)
+    url = f"https://www.searspartsdirect.com/search?q={quote(model_number)}"
+    return {
+        "source": "Sears PartsDirect",
+        "count": count,
+        "url": url,
+        "evidence": f"Exact model {model_number}: {count} parts",
+    }
+
+
+def parse_encompass_expected_count(html: str, model_number: str) -> dict | None:
+    requested = _normalize_model_token(model_number)
+    compact_html = re.sub(r"\s+", " ", html)
+    model_matches = list(re.finditer(re.escape(model_number), compact_html, re.IGNORECASE))
+    if not model_matches or requested not in _normalize_model_token(compact_html):
+        return None
+
+    counts = []
+    for model_match in model_matches:
+        end = min(len(compact_html), model_match.end() + 1200)
+        nearby = compact_html[model_match.end():end]
+        count_match = re.search(r"\b(\d{1,3})\s+parts?\b", nearby, re.IGNORECASE)
+        if count_match and (count := _credible_count(count_match.group(1))) is not None:
+            counts.append(count)
+    if not counts:
+        return None
+
+    count = max(counts)
+    url = f"https://encompass.com/search?searchTerm={quote(model_number)}"
+    return {
+        "source": "Encompass",
+        "count": count,
+        "url": url,
+        "evidence": f"Exact model {model_number}: {count} parts",
+    }
+
+
+def _direct_expected_count_source(
+    source_name: str,
+    url: str,
+    parser,
+    model_number: str,
+) -> dict:
+    try:
+        html = _fetch_source_html(url)
+        result = parser(html, model_number)
+        return result or {
+            "_error": f"{source_name} did not expose an exact-model part count"
+        }
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        return {"_error": f"{source_name} fetch failed: {exc}"}
+
+
+def _grounded_expected_count_source(
+    source_name: str,
+    source_url: str,
+    model_number: str,
+) -> dict:
+    prompt = (
+        f"Open this exact {source_name} URL for appliance model '{model_number}': {source_url}\n"
+        f"Return the visible number labeled as parts for the exact model '{model_number}'. "
+        "Do not use diagram callout numbers, search-result totals for other models, compatible "
+        "models, or any other domain. source_totals must be empty if the exact model and its "
+        "visible parts count cannot be verified from this site. When verified, include exactly "
+        "one source_totals item with this URL and evidence text containing the model and count. "
+        "Set expected_parts_count to that count, basis=source_total, and confidence=high."
+    )
+    return _call(MODEL_FLASH, prompt, S5_COUNT, "MINIMAL", retries=1)
+
+
+def step5_expected_count(nameplate: dict, sections: dict | None = None) -> dict:
+    mn = nameplate["model_number"]
+    sources = [
+        (
+            "Sears PartsDirect",
+            f"https://www.searspartsdirect.com/search?q={quote(mn)}",
+            parse_sears_expected_count,
+        ),
+        (
+            "Encompass",
+            f"https://encompass.com/search?searchTerm={quote(mn)}",
+            parse_encompass_expected_count,
+        ),
+    ]
+    direct_results = _parallel([
+        (
+            lambda source_name=source_name, url=url, parser=parser:
+            _direct_expected_count_source(source_name, url, parser, mn)
+        )
+        for source_name, url, parser in sources
+    ])
+    source_totals = [
+        result for result in direct_results
+        if isinstance(result, dict) and "_error" not in result
+    ]
+
+    grounded_results = []
+    if len(source_totals) < len(sources):
+        resolved_hosts = {
+            (urlparse(source.get("url") or "").hostname or "").lower()
+            for source in source_totals
+        }
+        unresolved_sources = [
+            (source_name, url)
+            for source_name, url, _parser in sources
+            if (urlparse(url).hostname or "").lower() not in resolved_hosts
+        ]
+        grounded_results = _parallel([
+            (
+                lambda source_name=source_name, url=url:
+                _grounded_expected_count_source(source_name, url, mn)
+            )
+            for source_name, url in unresolved_sources
+        ])
+        for result in grounded_results:
+            if not isinstance(result, dict) or "_error" in result:
+                continue
+            for source in result.get("source_totals", []) or []:
+                if _credible_count(source.get("count")) and _trusted_expected_count_source(source):
+                    source_totals.append(source)
+
+    unique_sources = {}
+    for source in source_totals:
+        key = (
+            (urlparse(source.get("url") or "").hostname or "").lower(),
+            _credible_count(source.get("count")),
+        )
+        unique_sources[key] = source
+    source_totals = list(unique_sources.values())
+
+    if not source_totals:
+        errors = [
+            result.get("_error")
+            for result in [*direct_results, *grounded_results]
+            if isinstance(result, dict) and result.get("_error")
+        ]
+        raise RuntimeError(
+            "Unable to establish an exact-model expected part count from "
+            f"Sears PartsDirect or Encompass for {mn}. "
+            + " ".join(errors)
+        )
+
+    values = [
+        _credible_count(source.get("count"))
+        for source in source_totals
+        if _credible_count(source.get("count")) is not None
+    ]
+    expected = max(values)
+    return {
+        "expected_parts_count": expected,
+        "confidence": "high",
+        "basis": "cross_referenced" if len(source_totals) > 1 else "source_total",
+        "source_totals": source_totals,
+        "per_section_counts": [
+            {
+                "section_name": section.get("section_name"),
+                "count": section.get("observed_part_count"),
+            }
+            for section in (sections or {}).get("sections", [])
+            if _credible_count(section.get("observed_part_count"))
+        ],
+        "notes": (
+            f"Exact-model source totals disagree; using {expected} as the coverage target."
+            if len(set(values)) > 1
+            else "Exact-model source count verified."
+        ),
+    }
 
 
 def _credible_count(value) -> int | None:
@@ -786,41 +1026,46 @@ def run_pipeline_fast(timeout_seconds: int = 55, audit_sections: bool = False,
     nameplate = step1_nameplate(**nameplate_input)
     t_curr = log_bench("step1_nameplate", t_start)
 
-    print("[2] finding diagrams ...")
-    diagrams = step2_find_diagrams(nameplate)
-    t_curr = log_bench("step2_find_diagrams", t_curr)
-
-    print("[3] consolidating sections ...")
-    sections = (
-        step3_consolidate(nameplate, diagrams)
-        if audit_sections
-        else consolidate_diagram_results(diagrams)
-    )
-    t_curr = log_bench("step3_consolidate", t_curr)
-
-    if audit_sections:
-        print("[4] auditing for missing sections ...")
-        audits = step4_audit(nameplate, sections)
-        sections = merge_audit_into_sections(sections, audits)
-        t_curr = log_bench("step4_audit", t_curr)
-
-    master: dict = {}
-    provenance: dict = {}
-    assignments = initial_assignments(sections)
-    past_covered = set()
-    consecutive_stalls = 0
-    found_keys = set()
-
-    print("[5/6] expected count and initial extraction ...")
-    initial_jobs = [
-        (lambda a=a: step6_extract(nameplate, sections, a, found_keys))
-        for a in assignments
-    ]
     with ThreadPoolExecutor(max_workers=1) as count_executor:
-        count_future = count_executor.submit(step5_expected_count, nameplate, sections)
+        count_future = count_executor.submit(step5_expected_count, nameplate)
+
+        print("[2] finding diagrams ...")
+        diagrams = step2_find_diagrams(nameplate)
+        t_curr = log_bench("step2_find_diagrams", t_curr)
+
+        print("[3] consolidating sections ...")
+        sections = (
+            step3_consolidate(nameplate, diagrams)
+            if audit_sections
+            else consolidate_diagram_results(diagrams)
+        )
+        t_curr = log_bench("step3_consolidate", t_curr)
+
+        if audit_sections:
+            print("[4] auditing for missing sections ...")
+            audits = step4_audit(nameplate, sections)
+            sections = merge_audit_into_sections(sections, audits)
+            t_curr = log_bench("step4_audit", t_curr)
+
+        master: dict = {}
+        provenance: dict = {}
+        assignments = initial_assignments(sections)
+        past_covered = set()
+        consecutive_stalls = 0
+        found_keys = set()
+
+        print("[5/6] expected count and initial extraction ...")
+        initial_jobs = [
+            (lambda a=a: step6_extract(nameplate, sections, a, found_keys))
+            for a in assignments
+        ]
         initial_worker_outputs = _parallel(initial_jobs)
         raw_count_info = count_future.result()
     expected, count_info = normalize_expected_count(raw_count_info)
+    if expected <= 0:
+        raise RuntimeError(
+            f"Expected part count is required before extracting {nameplate['model_number']}"
+        )
     extraction_target = expected or min(
         MAX_CREDIBLE_EXPECTED_PARTS,
         max(PARTS_PER_WORKER, len(sections.get("sections", [])) * PARTS_PER_WORKER),
