@@ -42,3 +42,7 @@ __pycache__/
 # Production cache: Neon extraction_cache table
 services/extraction/cache/*
 !services/extraction/cache/.gitkeep
+
+# ephemeral debug/inspection scripts (smoke testing artifacts)
+scripts/inspect-*.js
+scripts/test-*.js
