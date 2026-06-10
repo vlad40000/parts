@@ -18,6 +18,7 @@ import sys
 import uuid
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 
 from google import genai
 from google.genai import types
@@ -39,8 +40,14 @@ STALL_ROUNDS = 2        # stop if this many consecutive rounds add zero new part
 WORKERS_STEP2 = 3
 WORKERS_STEP4 = 3
 WORKERS_STEP6 = 5
-PARTS_PER_WORKER = 20
+PARTS_PER_WORKER = 50
 MAX_CREDIBLE_EXPECTED_PARTS = 500
+TRUSTED_EXPECTED_COUNT_HOSTS = frozenset({
+    "encompass.com",
+    "www.encompass.com",
+    "searspartsdirect.com",
+    "www.searspartsdirect.com",
+})
 
 client = None
 
@@ -383,7 +390,7 @@ def consolidate_diagram_results(diagram_results: list) -> dict:
             name = (diagram.get("section_name") or "").strip()
             if not name:
                 continue
-            key = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+            key = re.sub(r"[^a-z0-9]+", "", name.lower())
             section = merged.setdefault(key, {
                 "section_name": name,
                 "aliases": [],
@@ -454,17 +461,21 @@ def step5_expected_count(nameplate: dict, sections: dict) -> dict:
     blob = json.dumps(sections.get("sections", []), ensure_ascii=False)
     prompt = (
         f"Establish the expected count of DISTINCT ORDERABLE PART ROWS for exact appliance model "
-        f"'{mn}'. Prefer exact-model totals visibly reported by distributor model pages such as "
-        "Sears PartsDirect and Encompass. Record every verified total in source_totals with its "
-        "exact URL and visible evidence text. If credible exact-model sources disagree, set "
+        f"'{mn}'. Only exact-model totals visibly reported by searspartsdirect.com or encompass.com "
+        "qualify as the canonical unique-part target. Record every verified total from those two "
+        "domains in source_totals with its exact URL and visible evidence text. If those credible "
+        "exact-model sources disagree, set "
         "expected_parts_count to the largest credible total and explain the range in notes.\n\n"
         "CRITICAL: diagram reference numbers such as 999, 825, 693, or 557 are identifiers, not "
         "ordinal counts. NEVER use the highest reference number as a count and NEVER sum reference "
         "numbers. A per-section count is valid only when you counted distinct visible callout rows "
-        "or parts-table rows. Do not include generic search-result totals, compatible-model totals, "
-        "accessory pages, or unrelated models. Use basis=source_total for one verified distributor "
-        "total, cross_referenced for multiple verified totals, or diagram_callouts only when actual "
-        "distinct callouts were counted. Return low confidence when no exact-model total is visible."
+        "or parts-table rows. Diagram-section totals from PartsDr or similar sites are occurrence "
+        "counts and may contain duplicate MPNs across diagrams; preserve them in per_section_counts "
+        "but never use their sum as the unique-part target. Do not include generic search-result "
+        "totals, compatible-model totals, accessory pages, or unrelated models. Use "
+        "basis=source_total for one verified Sears/Encompass total, cross_referenced for both, or "
+        "diagram_callouts only when neither trusted source total is available. Return "
+        "expected_parts_count=0 with low confidence when neither trusted exact-model total is visible."
         "\n\nSections:\n" + blob
     )
     return _call(MODEL_FLASH, prompt, S5_COUNT, "MINIMAL")
@@ -478,6 +489,14 @@ def _credible_count(value) -> int | None:
     return count if 0 < count <= MAX_CREDIBLE_EXPECTED_PARTS else None
 
 
+def _trusted_expected_count_source(source: dict) -> bool:
+    try:
+        host = (urlparse(source.get("url") or "").hostname or "").lower()
+    except ValueError:
+        return False
+    return host in TRUSTED_EXPECTED_COUNT_HOSTS
+
+
 def normalize_expected_count(count_info: dict) -> tuple[int, dict]:
     """
     Select a bounded expected count from exact-model evidence.
@@ -486,15 +505,19 @@ def normalize_expected_count(count_info: dict) -> tuple[int, dict]:
     never considered because they are identifiers, not row counts.
     """
     source_counts = []
+    rejected_source_counts = []
     for source in count_info.get("source_totals", []) or []:
         count = _credible_count(source.get("count"))
-        if count is not None:
-            source_counts.append({
-                "source": source.get("source"),
-                "count": count,
-                "url": source.get("url"),
-                "evidence": source.get("evidence"),
-            })
+        normalized = {
+            "source": source.get("source"),
+            "count": count,
+            "url": source.get("url"),
+            "evidence": source.get("evidence"),
+        }
+        if count is not None and _trusted_expected_count_source(source):
+            source_counts.append(normalized)
+        elif count is not None:
+            rejected_source_counts.append(normalized)
 
     raw_count = count_info.get("expected_parts_count")
     raw_credible = _credible_count(raw_count)
@@ -504,26 +527,20 @@ def normalize_expected_count(count_info: dict) -> tuple[int, dict]:
     if source_counts:
         selected = max(source["count"] for source in source_counts)
         selection_basis = "source_totals"
-    else:
-        section_counts = [
-            count
-            for item in count_info.get("per_section_counts", []) or []
-            if (count := _credible_count(item.get("count"))) is not None
-        ]
-        section_total = sum(section_counts)
-        if section_counts and section_total <= MAX_CREDIBLE_EXPECTED_PARTS:
-            selected = section_total
-            selection_basis = "counted_diagram_rows"
-        elif raw_credible is not None:
-            selected = raw_credible
-            selection_basis = "bounded_model_total"
 
+    section_counts = [
+        count
+        for item in count_info.get("per_section_counts", []) or []
+        if (count := _credible_count(item.get("count"))) is not None
+    ]
     meta = {
         **count_info,
         "raw_expected_parts_count": raw_count,
         "selected_expected_parts_count": selected,
         "selection_basis": selection_basis,
         "source_totals": source_counts,
+        "rejected_source_totals": rejected_source_counts,
+        "diagram_occurrence_total": sum(section_counts) if section_counts else None,
     }
     if source_counts:
         values = [source["count"] for source in source_counts]
@@ -531,7 +548,7 @@ def normalize_expected_count(count_info: dict) -> tuple[int, dict]:
             "minimum": min(values),
             "maximum": max(values),
         }
-    if raw_count and raw_credible is None:
+    if raw_count and (raw_credible is None or not source_counts):
         meta["rejected_expected_parts_count"] = raw_count
 
     return selected, meta

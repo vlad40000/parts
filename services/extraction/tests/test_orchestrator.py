@@ -19,7 +19,15 @@ def mock_dependencies():
         m_s2.return_value = []
         m_s3.return_value = {"sections": [{"section_name": "Drum"}, {"section_name": "Motor"}]}
         m_s4.return_value = []
-        m_s5.return_value = {"expected_parts_count": 10}
+        m_s5.return_value = {
+            "expected_parts_count": 10,
+            "source_totals": [{
+                "source": "Encompass",
+                "count": 10,
+                "url": "https://encompass.com/search?searchTerm=TEST1234",
+                "evidence": "10 parts",
+            }],
+        }
         
         yield m_parallel, m_s7
 

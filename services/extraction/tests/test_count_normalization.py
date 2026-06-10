@@ -20,7 +20,7 @@ def test_fast_consolidation_preserves_counts_separately_from_reference_labels():
         },
         {
             "diagrams": [{
-                "section_name": "Tub & Motor",
+                "section_name": "T U B & M O T O R",
                 "diagram_url": "https://example.com/tub.png",
                 "page_url": "https://example.com/model/tub",
                 "distinct_callout_count_seen": 29,
@@ -31,7 +31,7 @@ def test_fast_consolidation_preserves_counts_separately_from_reference_labels():
 
     assert sections["sections"] == [{
         "section_name": "Tub & Motor",
-        "aliases": [],
+        "aliases": ["T U B & M O T O R"],
         "diagram_urls": ["https://example.com/tub.png"],
         "page_urls": ["https://example.com/model/tub"],
         "observed_part_count": 31,
@@ -78,21 +78,41 @@ def test_implausible_unverified_total_becomes_unknown():
     assert meta["selection_basis"] == "unknown"
 
 
-def test_counted_diagram_rows_are_summed_when_sources_are_unavailable():
+def test_diagram_occurrences_are_not_used_as_unique_part_target():
     expected, meta = normalize_expected_count({
-        "expected_parts_count": 90,
+        "expected_parts_count": 101,
         "confidence": "medium",
         "basis": "diagram_callouts",
         "per_section_counts": [
-            {"section_name": "Tub & Motor", "count": 31},
-            {"section_name": "Controls", "count": 19},
-            {"section_name": "Cabinet", "count": 14},
-            {"section_name": "Top & Lid", "count": 21},
+            {"section_name": "Tub & Motor", "count": 38},
+            {"section_name": "Controls", "count": 20},
+            {"section_name": "Cabinet", "count": 9},
+            {"section_name": "Top & Lid", "count": 34},
         ],
     })
 
-    assert expected == 85
-    assert meta["selection_basis"] == "counted_diagram_rows"
+    assert expected == 0
+    assert meta["diagram_occurrence_total"] == 101
+    assert meta["rejected_expected_parts_count"] == 101
+    assert meta["selection_basis"] == "unknown"
+
+
+def test_untrusted_distributor_total_is_evidence_not_unique_target():
+    expected, meta = normalize_expected_count({
+        "expected_parts_count": 101,
+        "confidence": "high",
+        "basis": "source_total",
+        "source_totals": [{
+            "source": "Parts Dr",
+            "count": 101,
+            "url": "https://partsdr.com/model/ge-ptw905bpt0dg-parts-diagrams",
+            "evidence": "Four diagram totals sum to 101",
+        }],
+    })
+
+    assert expected == 0
+    assert meta["source_totals"] == []
+    assert meta["rejected_source_totals"][0]["count"] == 101
 
 
 def test_audit_requires_model_specific_url_evidence():
