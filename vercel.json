@@ -4,6 +4,10 @@
     "api/extract/cold-sync.py": {
       "maxDuration": 60,
       "memory": 1024
+    },
+    "api/extract/expected-count.py": {
+      "maxDuration": 60,
+      "memory": 1024
     }
   }
 }

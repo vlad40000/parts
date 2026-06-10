@@ -173,6 +173,7 @@ class handler(BaseHTTPRequestHandler):
             "serial": body.get("serial"),
             "brand": body.get("brand"),
             "appliance_type": body.get("appliance_type"),
+            "expected_count_info": body.get("expected_count_info"),
         }
 
         # ------------------------------------------------------------------ run pipeline

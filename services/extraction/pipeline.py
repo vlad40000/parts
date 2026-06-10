@@ -990,8 +990,12 @@ def to_scaffold_payload(results: dict, job_id: str) -> dict:
         "parts_found": results.get("parts_found")
     }
 
-def run_pipeline_fast(timeout_seconds: int = 55, audit_sections: bool = False,
-                      **nameplate_input) -> dict:
+def run_pipeline_fast(
+    timeout_seconds: int = 55,
+    audit_sections: bool = False,
+    expected_count_info: dict | None = None,
+    **nameplate_input,
+) -> dict:
     """
     Cold-sync path: runs the pipeline with a strict latency envelope.
     If it hits timeout_seconds, it will return partial results seamlessly.
@@ -1027,7 +1031,11 @@ def run_pipeline_fast(timeout_seconds: int = 55, audit_sections: bool = False,
     t_curr = log_bench("step1_nameplate", t_start)
 
     with ThreadPoolExecutor(max_workers=1) as count_executor:
-        count_future = count_executor.submit(step5_expected_count, nameplate)
+        count_future = count_executor.submit(
+            (lambda: expected_count_info)
+            if expected_count_info is not None
+            else (lambda: step5_expected_count(nameplate))
+        )
 
         print("[2] finding diagrams ...")
         diagrams = step2_find_diagrams(nameplate)

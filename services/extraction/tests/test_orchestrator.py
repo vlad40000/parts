@@ -77,6 +77,38 @@ def test_completion_exit(mock_dependencies):
     assert m_s7.call_count == 0
 
 
+def test_pre_resolved_expected_count_skips_count_lookup(mock_dependencies):
+    m_parallel, _m_s7 = mock_dependencies
+    m_parallel.return_value = [{"parts": [
+        {
+            "section": "Drum",
+            "manufacturer_part_number": f"PART{i}",
+            "part_name": f"Part {i}",
+            "part_number_status": "confirmed",
+        }
+        for i in range(94)
+    ]}]
+    count_info = {
+        "expected_parts_count": 94,
+        "source_totals": [{
+            "source": "Encompass",
+            "count": 94,
+            "url": "https://encompass.com/search?searchTerm=TEST1234",
+            "evidence": "94 parts",
+        }],
+    }
+
+    with patch("services.extraction.pipeline.step5_expected_count") as count_lookup:
+        result = run_pipeline_fast(
+            timeout_seconds=9999,
+            model_number="TEST1234",
+            expected_count_info=count_info,
+        )
+
+    count_lookup.assert_not_called()
+    assert result["expected_parts_count"] == 94
+
+
 def test_round_cap_exit(mock_dependencies):
     m_parallel, m_s7 = mock_dependencies
     

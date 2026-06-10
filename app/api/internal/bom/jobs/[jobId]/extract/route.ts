@@ -13,6 +13,7 @@ import {
 import { resolveInternalWorkerRequest, type InternalWorkerRequest } from "@/features/bom/extraction/internal-url";
 
 export const runtime = "nodejs";
+export const maxDuration = 180;
 
 async function readMode(request: Request): Promise<ExtractionMode> {
   const body = await request.text();
@@ -81,6 +82,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
   }
 
   const workerRequest = resolveInternalWorkerRequest("/api/extract/cold-sync");
+  const countWorkerRequest = resolveInternalWorkerRequest("/api/extract/expected-count");
   const workerUrl = workerRequest.url;
   const runId = `extraction_run_${randomUUID()}`;
   const startedAt = new Date();
@@ -88,6 +90,40 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
   let rawPayload: unknown = {};
 
   try {
+    const countResponse = await fetch(countWorkerRequest.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...countWorkerRequest.headers
+      },
+      cache: "no-store",
+      body: JSON.stringify({ model_number: job.modelNumber })
+    });
+    const countResponseText = await countResponse.text();
+    let countPayload: {
+      expected_parts_count?: unknown;
+      expected_count_info?: unknown;
+      detail?: unknown;
+      error?: unknown;
+    } = {};
+    try {
+      countPayload = countResponseText ? JSON.parse(countResponseText) : {};
+    } catch {
+      countPayload = { detail: countResponseText };
+    }
+
+    if (
+      !countResponse.ok ||
+      typeof countPayload.expected_parts_count !== "number" ||
+      countPayload.expected_parts_count <= 0 ||
+      !countPayload.expected_count_info ||
+      typeof countPayload.expected_count_info !== "object"
+    ) {
+      throw new Error(
+        `Expected part count resolution failed: ${errorDetails(countPayload, countWorkerRequest)}`
+      );
+    }
+
     const response = await fetch(workerUrl, {
       method: "POST",
       headers: {
@@ -101,7 +137,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
         brand: job.brand,
         appliance_type: job.applianceType,
         serial: job.serial,
-        mode
+        mode,
+        expected_count_info: countPayload.expected_count_info
       })
     });
 
