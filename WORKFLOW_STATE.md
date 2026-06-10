@@ -70,6 +70,13 @@ Build the internal multi-manufacturer Appliance BOM Workbench, wiring the Python
   - Added `google-genai` to `requirements.txt`.
   - Added `GEMINI_API_KEY=your_key_here` to `.env.local`.
   - Verified extraction runs successfully in Vercel Production by securely configuring the `GEMINI_API_KEY` Environment Variable and triggering a test against `/api/extract/cold-sync`.
+- Deployment worker configuration:
+  - Added `vercel.json` with a 60-second duration and 1024 MB memory for `api/extract/cold-sync.py`.
+  - Documented `INTERNAL_APP_URL`, `VERCEL_AUTOMATION_BYPASS_SECRET`, and `GEMINI_API_KEY` in `.env.example`.
+  - Confirmed the extraction route already sends Vercel protection-bypass headers when configured.
+  - Cleaned null-byte corruption from `.gitignore` and preserved secret env-file exclusions.
+  - `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build` pass.
+  - Local `vercel build --prod` compiles Next.js and creates serverless functions, but Vercel CLI 50.12.3 fails during final local packaging by requesting a lambda for a valid static prerendered page. No static pages were converted to server functions as a workaround.
 
 ## Next Steps
 1. **Execute Step 6 Smoke Test**: Trigger a full extraction via the UI on production (https://appliance-parts-pipeline.vercel.app/) and verify the DB results.

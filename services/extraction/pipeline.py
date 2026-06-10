@@ -41,7 +41,7 @@ WORKERS_STEP4 = 3
 WORKERS_STEP6 = 5
 PARTS_PER_WORKER = 20
 
-client = genai.Client()
+client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 
 # ---------------------------------------------------------------------------- schemas
