@@ -85,6 +85,20 @@ Build the internal multi-manufacturer Appliance BOM Workbench, wiring the Python
   - UI verified: Job shows `PRICING PENDING` badge, notes confirm extraction completed.
   - Pipeline is partial (78/90 expected) — expected behavior for 60s `fast` mode; warm mode with cache will improve completeness.
 
+- Step 7 - Pricing adapter pipeline (COMPLETE - 2026-06-10, commit 9a0cca9):
+  - **Adapters:**
+    - `src/features/bom/pricing/adapters/encompass.ts`: credential-gated REST JSON (ENCOMPASS_API_USERNAME/PASSWORD). Graceful skip if not configured.
+    - `src/features/bom/pricing/adapters/dlpartsco.ts`: SSR HTML scrape, browser UA. Price from `span.your-price`. Live-confirmed: W10780048 = $68.65.
+    - `src/features/bom/pricing/adapters/index.ts`: priority registry [encompass → dlpartsco].
+  - **Store:** `pricing-store.ts` — `loadPendingParts`, `persistPricingBatch` (winner-map dedup), `markPricingComplete`. Uses `neon() .query()` API.
+  - **Route:** `app/api/internal/bom/jobs/[jobId]/price/route.ts` — real orchestration. Concurrent batch-of-5 fan-out. Idempotent guard on `pricing_complete`.
+  - **UI:** Dedicated "Run Pricing" card with loading state, `PricingResultPanel` (priced/not_found/hit rate), badge transitions to `PRICING COMPLETE`.
+  - **Types:** `BomJobStatus` extended with `extraction_running`, `extraction_complete`, `extraction_failed`, `pricing_complete`.
+  - **Tests:** 34/34 pass (10 new adapter unit tests).
+  - **Blockers:** Encompass requires `ENCOMPASS_API_USERNAME` + `ENCOMPASS_API_PASSWORD` env vars in Vercel. Without these, all pricing falls through to D&L Parts Co scrape.
+
 ## Next Steps
-1. Step 7: Encompass / D&L Parts pricing adapter.
-2. Follow-up: Wire `run_pipeline_warm` to Neon `extraction_cache` table (requires migration first).
+1. **Smoke test Step 7**: Trigger "Run Pricing" in production UI on a job in `pricing_pending` status. Verify `pricing_observations` rows and `canonical_bom_parts.price` in Neon.
+2. **Env config (optional)**: Add `ENCOMPASS_API_USERNAME` and `ENCOMPASS_API_PASSWORD` to Vercel env vars if Encompass account is available.
+3. **Step 8 (follow-up)**: Wire `run_pipeline_warm` to Neon `extraction_cache` table (requires migration first).
+
