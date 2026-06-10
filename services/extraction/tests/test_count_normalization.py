@@ -1,9 +1,42 @@
 from services.extraction.pipeline import (
+    consolidate_diagram_results,
     initial_assignments,
     merge_audit_into_sections,
     normalize_expected_count,
     to_scaffold_payload,
 )
+
+
+def test_fast_consolidation_preserves_counts_separately_from_reference_labels():
+    sections = consolidate_diagram_results([
+        {
+            "diagrams": [{
+                "section_name": "Tub & Motor",
+                "diagram_url": "https://example.com/tub.png",
+                "page_url": "https://example.com/model/tub",
+                "distinct_callout_count_seen": 31,
+                "max_reference_label_seen": "824",
+            }]
+        },
+        {
+            "diagrams": [{
+                "section_name": "Tub & Motor",
+                "diagram_url": "https://example.com/tub.png",
+                "page_url": "https://example.com/model/tub",
+                "distinct_callout_count_seen": 29,
+                "max_reference_label_seen": "824",
+            }]
+        },
+    ])
+
+    assert sections["sections"] == [{
+        "section_name": "Tub & Motor",
+        "aliases": [],
+        "diagram_urls": ["https://example.com/tub.png"],
+        "page_urls": ["https://example.com/model/tub"],
+        "observed_part_count": 31,
+        "max_reference_label": "824",
+    }]
 
 
 def test_exact_model_source_totals_override_reference_label_sum():

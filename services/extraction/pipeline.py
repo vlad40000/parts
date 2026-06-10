@@ -73,7 +73,8 @@ S2_DIAGRAMS = {
                     "diagram_url": {"type": ["string", "null"]},   # direct image if resolvable
                     "page_url": {"type": "string"},
                     "source_site": {"type": "string"},
-                    "callout_count_seen": {"type": ["integer", "null"]},  # highest callout id observed
+                    "distinct_callout_count_seen": {"type": ["integer", "null"]},
+                    "max_reference_label_seen": {"type": ["string", "null"]},
                     "notes": {"type": ["string", "null"]},
                 },
             },
@@ -95,7 +96,8 @@ S3_SECTIONS = {
                     "aliases": {"type": "array", "items": {"type": "string"}},
                     "diagram_urls": {"type": "array", "items": {"type": "string"}},
                     "page_urls": {"type": "array", "items": {"type": "string"}},
-                    "callout_count_estimate": {"type": ["integer", "null"]},
+                    "observed_part_count": {"type": ["integer", "null"]},
+                    "max_reference_label": {"type": ["string", "null"]},
                 },
             },
         }
@@ -345,7 +347,9 @@ def step2_find_diagrams(nameplate: dict) -> list:
                 "or diagram image and read it. For every distinct assembly section (e.g. "
                 "'Drum', 'Control Panel', 'Door', 'Cabinet'), return the section name, the page "
                 "url, the direct diagram image url if you can resolve it, the source site, and "
-                "the HIGHEST callout/reference number you can see on that diagram. "
+                "the number of DISTINCT visible callout labels. Also preserve the highest visible "
+                "reference label separately as max_reference_label_seen. Reference labels such as "
+                "999 or 825 are identifiers, not counts. "
                 f"{lean} Only report diagrams that actually match model '{mn}' or an explicitly "
                 "stated compatible model."
             )
@@ -362,10 +366,49 @@ def step3_consolidate(nameplate: dict, diagram_results: list) -> dict:
         f"These are diagram findings from three searches for model '{mn}'. Merge them into one "
         "canonical list of assembly sections. Deduplicate sections that are the same thing under "
         "different names (record the variants in 'aliases'). For each canonical section, union all "
-        "diagram_urls and page_urls, and keep the largest callout_count_estimate seen. Return only "
+        "diagram_urls and page_urls, keep the best distinct observed_part_count, and preserve the "
+        "largest max_reference_label only as an identifier. Return only "
         f"sections that plausibly belong to model '{mn}'.\n\nFindings:\n{blob}"
     )
     return _call(MODEL_LITE, prompt, S3_SECTIONS, "MINIMAL")
+
+
+def consolidate_diagram_results(diagram_results: list) -> dict:
+    """Merge exact diagram findings without spending another model call."""
+    merged = {}
+    for result in diagram_results:
+        if not isinstance(result, dict) or "_error" in result:
+            continue
+        for diagram in result.get("diagrams", []) or []:
+            name = (diagram.get("section_name") or "").strip()
+            if not name:
+                continue
+            key = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+            section = merged.setdefault(key, {
+                "section_name": name,
+                "aliases": [],
+                "diagram_urls": [],
+                "page_urls": [],
+                "observed_part_count": None,
+                "max_reference_label": None,
+            })
+            if name != section["section_name"] and name not in section["aliases"]:
+                section["aliases"].append(name)
+            for field, target in (
+                ("diagram_url", "diagram_urls"),
+                ("page_url", "page_urls"),
+            ):
+                value = diagram.get(field)
+                if value and value not in section[target]:
+                    section[target].append(value)
+            observed = _credible_count(diagram.get("distinct_callout_count_seen"))
+            if observed is not None:
+                current = section["observed_part_count"] or 0
+                section["observed_part_count"] = max(current, observed)
+            reference = diagram.get("max_reference_label_seen")
+            if reference:
+                section["max_reference_label"] = str(reference)
+    return {"sections": list(merged.values())}
 
 
 def step4_audit(nameplate: dict, sections: dict) -> list:
@@ -400,7 +443,8 @@ def merge_audit_into_sections(sections: dict, audits: list) -> dict:
                     "aliases": [],
                     "diagram_urls": [m["diagram_url"]] if m.get("diagram_url") else [],
                     "page_urls": [m["page_url"]] if m.get("page_url") else [],
-                    "callout_count_estimate": None,
+                    "observed_part_count": None,
+                    "max_reference_label": None,
                 })
     return sections
 
@@ -650,7 +694,7 @@ def to_scaffold_payload(results: dict, job_id: str) -> dict:
             "source_section_name": s.get("section_name"),
             "normalized_section_name": s.get("section_name"),
             "diagram_image_url": urls[0] if urls else None,
-            "observed_part_count": s.get("callout_count_estimate")
+            "observed_part_count": s.get("observed_part_count")
         })
 
     canonical_bom_parts = []
@@ -730,7 +774,11 @@ def run_pipeline_fast(timeout_seconds: int = 55, audit_sections: bool = False,
     t_curr = log_bench("step2_find_diagrams", t_curr)
 
     print("[3] consolidating sections ...")
-    sections = step3_consolidate(nameplate, diagrams)
+    sections = (
+        step3_consolidate(nameplate, diagrams)
+        if audit_sections
+        else consolidate_diagram_results(diagrams)
+    )
     t_curr = log_bench("step3_consolidate", t_curr)
 
     if audit_sections:
@@ -739,39 +787,51 @@ def run_pipeline_fast(timeout_seconds: int = 55, audit_sections: bool = False,
         sections = merge_audit_into_sections(sections, audits)
         t_curr = log_bench("step4_audit", t_curr)
 
-    print("[5] expected parts count ...")
-    raw_count_info = step5_expected_count(nameplate, sections)
-    expected, count_info = normalize_expected_count(raw_count_info)
-    extraction_target = expected or min(
-        MAX_CREDIBLE_EXPECTED_PARTS,
-        max(PARTS_PER_WORKER, len(sections.get("sections", [])) * PARTS_PER_WORKER),
-    )
-    t_curr = log_bench("step5_expected_count", t_curr)
-
     master: dict = {}
     provenance: dict = {}
     assignments = initial_assignments(sections)
     past_covered = set()
     consecutive_stalls = 0
+    found_keys = set()
+
+    print("[5/6] expected count and initial extraction ...")
+    initial_jobs = [
+        (lambda a=a: step6_extract(nameplate, sections, a, found_keys))
+        for a in assignments
+    ]
+    with ThreadPoolExecutor(max_workers=1) as count_executor:
+        count_future = count_executor.submit(step5_expected_count, nameplate, sections)
+        initial_worker_outputs = _parallel(initial_jobs)
+        raw_count_info = count_future.result()
+    expected, count_info = normalize_expected_count(raw_count_info)
+    extraction_target = expected or min(
+        MAX_CREDIBLE_EXPECTED_PARTS,
+        max(PARTS_PER_WORKER, len(sections.get("sections", [])) * PARTS_PER_WORKER),
+    )
+    t_curr = log_bench("step5_count_and_initial_extract", t_curr)
 
     for rnd in range(1, MAX_ROUNDS + 1):
-        elapsed = time.perf_counter() - t_start
-        if elapsed > timeout_seconds - 15:
-            # Leave 15s buffer for remaining logic/API responses so we don't hard-timeout
-            print("Timeout envelope approached. Returning partial.")
-            if bench_log:
-                bench_log.write(f"TIMEOUT EXCEEDED at round {rnd} (elapsed {elapsed:.2f}s)\n")
-            break
+        if rnd == 1:
+            worker_outputs = initial_worker_outputs
+        else:
+            elapsed = time.perf_counter() - t_start
+            if elapsed > timeout_seconds - 15:
+                # Leave 15s buffer for remaining logic/API responses.
+                print("Timeout envelope approached. Returning partial.")
+                if bench_log:
+                    bench_log.write(
+                        f"TIMEOUT EXCEEDED at round {rnd} (elapsed {elapsed:.2f}s)\n"
+                    )
+                break
 
-        found_keys = {"|".join(map(str, k)) for k in master.keys()}
-        print(f"[6] round {rnd}: extracting ...")
-        
-        jobs = [
-            (lambda a=a: step6_extract(nameplate, sections, a, found_keys))
-            for a in assignments
-        ]
-        worker_outputs = _parallel(jobs)
-        t_curr = log_bench(f"step6_extract_r{rnd}", t_curr)
+            found_keys = {"|".join(map(str, k)) for k in master.keys()}
+            print(f"[6] round {rnd}: extracting ...")
+            jobs = [
+                (lambda a=a: step6_extract(nameplate, sections, a, found_keys))
+                for a in assignments
+            ]
+            worker_outputs = _parallel(jobs)
+            t_curr = log_bench(f"step6_extract_r{rnd}", t_curr)
 
         added_total = 0
         success_count = 0
