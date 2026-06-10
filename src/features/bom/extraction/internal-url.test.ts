@@ -20,6 +20,13 @@ describe("resolveInternalAppUrl", () => {
     })).toBe("https://deployment.vercel.app");
   });
 
+  it("prefers VERCEL_PROJECT_PRODUCTION_URL over VERCEL_URL", () => {
+    expect(resolveInternalAppUrl({
+      VERCEL_PROJECT_PRODUCTION_URL: "parts-hazel.vercel.app",
+      VERCEL_URL: "deployment.vercel.app"
+    })).toBe("https://parts-hazel.vercel.app");
+  });
+
   it("uses localhost in local development", () => {
     expect(resolveInternalAppUrl({})).toBe("http://localhost:3000");
   });

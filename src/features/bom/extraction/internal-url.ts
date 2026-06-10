@@ -24,6 +24,9 @@ export function resolveInternalAppUrl(
   const configured = env.INTERNAL_APP_URL?.trim();
   if (configured) return normalizeBaseUrl(configured);
 
+  const vercelProjectProdUrl = env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (vercelProjectProdUrl) return normalizeBaseUrl(vercelProjectProdUrl);
+
   const vercelUrl = env.VERCEL_URL?.trim();
   if (vercelUrl) return normalizeBaseUrl(vercelUrl);
 
