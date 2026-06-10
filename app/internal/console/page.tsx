@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import BrandDisambiguation from "@/features/console/intake/BrandDisambiguation";
 import IntakeShell, { type IntakeOcrExtras } from "@/features/console/intake/IntakeShell";
@@ -21,11 +22,14 @@ function Row({ label, value }: { label: string; value: string | number | null | 
 }
 
 export default function ConsolePage() {
+  const router = useRouter();
   const [draft, setDraft] = useState<IdentityDraft | null>(null);
   const [ocr, setOcr] = useState<IntakeOcrExtras>({ candidates: [], decodeResult: null });
   const [resolved, setResolved] = useState<ResolvedIdentity | null>(null);
   const [busy, setBusy] = useState(false);
+  const [startingJob, setStartingJob] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jobError, setJobError] = useState<string | null>(null);
 
   async function resolve(d: IdentityDraft, extras: IntakeOcrExtras, pickedBrand?: string) {
     setBusy(true);
@@ -49,24 +53,37 @@ export default function ConsolePage() {
   }
 
   async function startBomJob() {
-    if (!resolved) return;
-    const response = await fetch("/api/internal/bom/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ identity: resolved })
-    });
-    const data = (await response.json()) as { jobId?: string; error?: string };
-    if (!response.ok) {
-      setError(data.error ?? "BOM job creation failed");
-      return;
+    if (!resolved || startingJob) return;
+
+    setStartingJob(true);
+    setJobError(null);
+    try {
+      const response = await fetch("/api/internal/bom/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identity: resolved })
+      });
+      const data = await response.json().catch(() => null) as { jobId?: string; error?: string } | null;
+      if (!response.ok) {
+        throw new Error(data?.error ?? `BOM job creation failed (${response.status})`);
+      }
+      if (!data?.jobId) {
+        throw new Error("BOM job creation did not return a job ID.");
+      }
+      router.push(`/internal/bom?jobId=${encodeURIComponent(data.jobId)}`);
+    } catch (e) {
+      setJobError(e instanceof Error ? e.message : "BOM job creation failed");
+    } finally {
+      setStartingJob(false);
     }
-    window.location.href = `/internal/bom?jobId=${data.jobId}`;
   }
 
   function reset() {
     setDraft(null);
     setResolved(null);
     setError(null);
+    setJobError(null);
+    setStartingJob(false);
     setOcr({ candidates: [], decodeResult: null });
   }
 
@@ -129,10 +146,24 @@ export default function ConsolePage() {
           </div>
 
           <div className="border-t border-slate-100 bg-slate-50 px-5 py-4">
-            <button type="button" disabled={!resolved?.allowBomStart} onClick={() => void startBomJob()} className={`rounded-lg px-4 py-2.5 text-sm font-semibold ${resolved?.allowBomStart ? "bg-slate-950 text-white hover:bg-slate-800" : "cursor-not-allowed bg-slate-100 text-slate-400"}`}>
-              Start BOM job
+            <button
+              type="button"
+              disabled={!resolved?.allowBomStart || startingJob}
+              onClick={() => void startBomJob()}
+              className={`rounded-lg px-4 py-2.5 text-sm font-semibold ${
+                resolved?.allowBomStart && !startingJob
+                  ? "bg-slate-950 text-white hover:bg-slate-800"
+                  : "cursor-not-allowed bg-slate-200 text-slate-500"
+              }`}
+            >
+              {startingJob ? "Starting BOM job..." : "Start BOM job"}
             </button>
-            <p className="mt-2 font-mono text-[11px] text-slate-400">BOM discovery/extraction/pricing routes are scaffolded and return honest pending states until adapters are implemented.</p>
+            {jobError && (
+              <div role="alert" className="mt-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {jobError}
+              </div>
+            )}
+            <p className="mt-2 font-mono text-[11px] text-slate-400">Creates the BOM job, then opens its discovery, extraction, and pricing workbench.</p>
           </div>
         </div>
       )}
