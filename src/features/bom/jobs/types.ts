@@ -5,7 +5,11 @@ export type BomJobStatus =
   | "identity_confirmed"
   | "discovery_pending"
   | "extract_pending"
+  | "extraction_running"
+  | "extraction_complete"
+  | "extraction_failed"
   | "pricing_pending"
+  | "pricing_complete"
   | "verification_pending"
   | "blocked";
 

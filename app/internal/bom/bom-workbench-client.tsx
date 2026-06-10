@@ -32,6 +32,22 @@ type ExtractionResult = ExtractionSuccess | ExtractionFailure;
 
 type ExtractionMode = "fast" | "warm";
 
+// ── Pricing response shape ───────────────────────────────────────────────────
+
+interface PricingSuccess {
+  pricing_complete: true;
+  priced: number;
+  not_found: number;
+  total: number;
+}
+
+interface PricingFailure {
+  pricing_complete?: false;
+  error: string;
+}
+
+type PricingResult = PricingSuccess | PricingFailure;
+
 // ── Phase label map ─────────────────────────────────────────────────────────
 
 const PHASE_LABELS: Record<string, { label: string; tone: "slate" | "amber" | "emerald" | "red" | "blue" }> = {
@@ -39,6 +55,8 @@ const PHASE_LABELS: Record<string, { label: string; tone: "slate" | "amber" | "e
   extraction_running: { label: "Extraction running…", tone: "blue" },
   extraction_complete: { label: "Extraction complete", tone: "emerald" },
   pricing_pending:    { label: "Pricing pending",     tone: "amber" },
+  pricing_running:    { label: "Pricing running…",    tone: "blue" },
+  pricing_complete:   { label: "Pricing complete",    tone: "emerald" },
   blocked:            { label: "Blocked",             tone: "red" },
   extraction_failed:  { label: "Extraction failed",   tone: "red" },
 };
@@ -127,6 +145,45 @@ function ExtractionResultPanel({ result }: { result: ExtractionResult }) {
   );
 }
 
+// ── Pricing result panel ────────────────────────────────────────────────────
+
+function PricingResultPanel({ result }: { result: PricingResult }) {
+  if (!result.pricing_complete) {
+    return (
+      <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4">
+        <p className="font-semibold text-red-800">Pricing failed</p>
+        <p className="mt-1 text-sm text-red-700">{result.error}</p>
+      </div>
+    );
+  }
+
+  const hitRate =
+    result.total > 0
+      ? Math.round((result.priced / result.total) * 100)
+      : 0;
+
+  return (
+    <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-emerald-800 font-semibold">Pricing complete</span>
+        <PhaseBadge status="pricing_pending" overridePhase="pricing_complete" />
+      </div>
+
+      <div className="divide-y divide-emerald-100 rounded-md border border-emerald-100 bg-white px-4">
+        <InfoRow label="Parts priced" value={`${result.priced} / ${result.total}`} />
+        <InfoRow label="Not found" value={result.not_found} />
+        <InfoRow label="Price hit rate" value={`${hitRate}%`} />
+      </div>
+
+      {result.not_found > 0 && (
+        <p className="text-xs text-amber-700">
+          {result.not_found} part{result.not_found !== 1 ? "s" : ""} had no price on Encompass or D&amp;L Parts Co.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Main component ──────────────────────────────────────────────────────────
 
 export default function BomWorkbenchPage() {
@@ -142,7 +199,11 @@ export default function BomWorkbenchPage() {
   const [extractionResult, setExtractionResult] = useState<ExtractionResult | null>(null);
   const [overridePhase, setOverridePhase] = useState<string | undefined>(undefined);
 
-  // General step action feedback (non-extraction steps)
+  // Pricing-specific state
+  const [pricing, setPricing] = useState(false);
+  const [pricingResult, setPricingResult] = useState<PricingResult | null>(null);
+
+  // General step action feedback (discover / verify / export)
   const [stepMessage, setStepMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -187,7 +248,34 @@ export default function BomWorkbenchPage() {
     }
   }
 
-  async function runStep(step: "discover" | "price" | "verify" | "export") {
+  async function runPricing() {
+    if (!jobId || pricing) return;
+    setPricing(true);
+    setPricingResult(null);
+    setStepMessage(null);
+    setOverridePhase("pricing_running");
+
+    try {
+      const response = await fetch(`/api/internal/bom/jobs/${jobId}/price`, { method: "POST" });
+      const data = (await response.json()) as PricingResult;
+      setPricingResult(data);
+
+      if (data.pricing_complete) {
+        setJob((prev) => prev ? { ...prev, status: "pricing_complete" as BomJobStatus } : prev);
+        setOverridePhase("pricing_complete");
+      } else {
+        setOverridePhase(undefined);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Network error during pricing";
+      setPricingResult({ error: message });
+      setOverridePhase(undefined);
+    } finally {
+      setPricing(false);
+    }
+  }
+
+  async function runStep(step: "discover" | "verify" | "export") {
     if (!jobId) return;
     setStepMessage(null);
     const response = await fetch(`/api/internal/bom/jobs/${jobId}/${step}`, { method: "POST" });
@@ -289,12 +377,42 @@ export default function BomWorkbenchPage() {
             </div>
           )}
 
+          {/* ── Pricing action card ── */}
+          {job && (
+            <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="text-sm font-semibold text-slate-800">Run Pricing</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Looks up each part on Encompass then D&amp;L Parts Co. Writes verified prices to canonical BOM parts.
+              </p>
+
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <button
+                  id="run-pricing-btn"
+                  type="button"
+                  onClick={() => void runPricing()}
+                  disabled={pricing || job.status === "pricing_complete"}
+                  className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {pricing ? "Pricing…" : job.status === "pricing_complete" ? "Already priced" : "Run Pricing"}
+                </button>
+
+                {pricing && (
+                  <span className="font-mono text-xs text-slate-400 animate-pulse">
+                    Fetching prices — may take 30–60 s
+                  </span>
+                )}
+              </div>
+
+              {pricingResult && <PricingResultPanel result={pricingResult} />}
+            </div>
+          )}
+
           {/* ── Other pipeline steps ── */}
           {job && (
             <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
               <h3 className="text-sm font-semibold text-slate-800">Other pipeline steps</h3>
-              <div className="mt-3 grid gap-2 sm:grid-cols-4">
-                {(["discover", "price", "verify", "export"] as const).map((step) => (
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                {(["discover", "verify", "export"] as const).map((step) => (
                   <button
                     key={step}
                     type="button"
