@@ -77,9 +77,13 @@ Build the internal multi-manufacturer Appliance BOM Workbench, wiring the Python
   - Cleaned null-byte corruption from `.gitignore` and preserved secret env-file exclusions.
   - `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build` pass.
   - Local `vercel build --prod` compiles Next.js and creates serverless functions, but Vercel CLI 50.12.3 fails during final local packaging by requesting a lambda for a valid static prerendered page. No static pages were converted to server functions as a workaround.
+- Reconciliation Status:
+  - Checked reconciliation between local folder and remote main branch (https://github.com/vlad40000/parts.git).
+  - The working directory is completely clean, with no modified or untracked files.
+  - The local `main` branch is ahead of the remote `origin/main` by exactly 1 commit: `cbf3003` ("feat: implement extraction pipeline logic and configure Vercel deployment settings").
+  - All code validations pass: local lint, typecheck, and all 20 tests pass successfully.
 
 ## Next Steps
-1. **Execute Step 6 Smoke Test**: Trigger a full extraction via the UI on production (https://appliance-parts-pipeline.vercel.app/) and verify the DB results.
+1. **Execute Step 6 Smoke Test**: Trigger a full extraction via the UI on production (https://parts-hazel.vercel.app/) and verify the DB results.
 2. Step 7: Encompass / D&L Parts pricing adapter.
 3. Follow-up: Wire `run_pipeline_warm` to Neon `extraction_cache` table (requires migration first).
-
