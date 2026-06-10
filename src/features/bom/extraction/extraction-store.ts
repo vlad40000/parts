@@ -141,6 +141,7 @@ export async function persistExtractionSuccess(
   payload: ExtractionScaffoldPayload,
   workerUrl: string
 ): Promise<ExtractionPersistenceResult> {
+  const isPartial = payload.status === "partial";
   const sectionRecords = payload.diagram_sections.map((section, index) => ({
     id: `diagram_section_${randomUUID()}`,
     section,
@@ -160,7 +161,6 @@ export async function persistExtractionSuccess(
     part
   }));
   const eventId = `job_event_${randomUUID()}`;
-  const isPartial = payload.status === "partial";
   const nextStatus = isPartial ? "extract_pending" : "pricing_pending";
   const nextPhase = isPartial ? "extract_pending" : "extraction_complete";
   const eventType = isPartial ? "extraction_partial" : "extraction_completed";
@@ -288,10 +288,10 @@ export async function persistExtractionSuccess(
         part.manufacturer_part_number ?? null,
         part.substitute_part_number ?? null,
         part.part_title ?? null,
-        part.discovery_source_count ?? 1,
-        confidence,
-        part.verification_status ?? "unverified"
-      ]));
+          part.discovery_source_count ?? 1,
+          confidence,
+          part.verification_status ?? "unverified"
+        ]));
     }
 
     statements.push(
