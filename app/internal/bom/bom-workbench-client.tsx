@@ -25,8 +25,8 @@ interface ExtractionSuccess {
     canonicalBomParts: number;
   };
   supersededCanonicalBomParts?: number;
-  status: "pricing_pending";
-  phase: "extraction_complete";
+  status: "extract_pending" | "pricing_pending";
+  phase: "extract_pending" | "extraction_complete";
   extractionStatus?: string;
   warnings?: string[];
 }
@@ -61,6 +61,7 @@ type PricingResult = PricingSuccess | PricingFailure;
 
 const PHASE_LABELS: Record<string, { label: string; tone: "slate" | "amber" | "emerald" | "red" | "blue" }> = {
   identity_confirmed: { label: "Identity confirmed", tone: "emerald" },
+  extract_pending:     { label: "Extraction incomplete", tone: "amber" },
   extraction_running: { label: "Extraction running…", tone: "blue" },
   extraction_complete: { label: "Extraction complete", tone: "emerald" },
   pricing_pending:    { label: "Pricing pending",     tone: "amber" },
@@ -123,10 +124,18 @@ function ExtractionResultPanel({ result }: { result: ExtractionResult }) {
     .join(", ");
 
   return (
-    <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3">
+    <div className={`mt-4 rounded-lg p-4 space-y-3 ${
+      result.extractionStatus === "partial"
+        ? "border border-amber-200 bg-amber-50"
+        : "border border-emerald-200 bg-emerald-50"
+    }`}>
       <div className="flex items-center gap-2">
-        <span className="text-emerald-800 font-semibold">Extraction complete</span>
-        <PhaseBadge status="pricing_pending" />
+        <span className={`font-semibold ${
+          result.extractionStatus === "partial" ? "text-amber-800" : "text-emerald-800"
+        }`}>
+          {result.extractionStatus === "partial" ? "Extraction partial" : "Extraction complete"}
+        </span>
+        <PhaseBadge status={result.status} overridePhase={result.phase} />
       </div>
 
       <div className="divide-y divide-emerald-100 rounded-md border border-emerald-100 bg-white px-4">
@@ -251,9 +260,8 @@ export default function BomWorkbenchPage() {
       setExtractionResult(data);
 
       if (data.status !== "failed") {
-        // Update local job status to reflect pricing_pending
-        setJob((prev) => prev ? { ...prev, status: "pricing_pending" } : prev);
-        setOverridePhase("extraction_complete");
+        setJob((prev) => prev ? { ...prev, status: data.status } : prev);
+        setOverridePhase(data.phase);
       } else {
         setOverridePhase("extraction_failed");
       }

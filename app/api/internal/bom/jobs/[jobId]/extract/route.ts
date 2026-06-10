@@ -276,6 +276,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
       latencyMs: effectiveLatency,
       rawPayload
     }, payload, workerUrl);
+    const isPartial = payload.status === "partial";
 
     return NextResponse.json({
       jobId,
@@ -288,8 +289,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ job
         canonicalBomParts: inserted.canonicalPartsInserted
       },
       supersededCanonicalBomParts: inserted.canonicalPartsSuperseded,
-      status: "pricing_pending",
-      phase: "extraction_complete",
+      status: isPartial ? "extract_pending" : "pricing_pending",
+      phase: isPartial ? "extract_pending" : "extraction_complete",
       extractionStatus: payload.status,
       warnings: payload.warnings
     });

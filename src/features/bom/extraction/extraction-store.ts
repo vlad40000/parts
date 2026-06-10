@@ -160,7 +160,13 @@ export async function persistExtractionSuccess(
     part
   }));
   const eventId = `job_event_${randomUUID()}`;
-  const note = "Python extraction adapter completed. Job moved to pricing_pending.";
+  const isPartial = payload.status === "partial";
+  const nextStatus = isPartial ? "extract_pending" : "pricing_pending";
+  const nextPhase = isPartial ? "extract_pending" : "extraction_complete";
+  const eventType = isPartial ? "extraction_partial" : "extraction_completed";
+  const note = isPartial
+    ? `Python extraction adapter returned a partial BOM (${partRecords.length} of ${payload.expected_parts_count}).`
+    : "Python extraction adapter completed. Job moved to pricing_pending.";
   const queries = getSql().transaction((transaction) => {
     const statements = [
       transaction.query(`
@@ -292,25 +298,27 @@ export async function persistExtractionSuccess(
       transaction.query(`
         UPDATE bom_jobs
         SET
-          status = 'pricing_pending',
-          current_phase = 'extraction_complete',
+          status = $2,
+          current_phase = $3,
           error_message = NULL,
-          notes = COALESCE(notes, '[]'::jsonb) || $2::jsonb,
+          notes = COALESCE(notes, '[]'::jsonb) || $4::jsonb,
           updated_at = now()
         WHERE id = $1
-      `, [context.jobId, JSON.stringify([note])]),
+      `, [context.jobId, nextStatus, nextPhase, JSON.stringify([note])]),
       transaction.query(`
         INSERT INTO bom_job_events (
           id, job_id, extraction_run_id, event_type, status, phase, note, details
         )
         VALUES (
-          $1, $2, $3, 'extraction_completed', 'pricing_pending',
-          'extraction_complete', $4, $5::jsonb
+          $1, $2, $3, $4, $5, $6, $7, $8::jsonb
         )
       `, [
         eventId,
         context.jobId,
         context.runId,
+        eventType,
+        nextStatus,
+        nextPhase,
         note,
         JSON.stringify({
           diagram_sections: sectionRecords.length,
