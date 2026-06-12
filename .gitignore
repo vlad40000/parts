@@ -4,7 +4,7 @@ node_modules/
 # next
 .next/
 out/
-tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # production
 build/
@@ -46,3 +46,6 @@ services/extraction/cache/*
 # ephemeral debug/inspection scripts (smoke testing artifacts)
 scripts/inspect-*.js
 scripts/test-*.js
+inspect-*.js
+test-*.js
+test-*.mjs
